@@ -1,15 +1,15 @@
-# KiCad temporary lock files
+# Temporary lock files
 ~*.lck
 
-# KiCad user local settings (window state, zoom level, open tabs)
+# User local settings
 *.kicad_prl
 
-# KiCad automatically generated backups & recovery files
+# Auto-backups and recovery
 *.bak
 *_recovered_*
 *-backups/
 _restore_backup_*/
 
-# Local editor / extension caches
+# Extension / Editor metadata
 .history/
 .claude_*
