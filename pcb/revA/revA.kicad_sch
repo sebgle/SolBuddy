@@ -10061,9 +10061,9 @@
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
-		(in_bom yes)
+		(in_bom no)
 		(on_board yes)
-		(in_pos_files yes)
+		(in_pos_files no)
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "408efad6-ce49-4d21-ab09-01301c722d23")
@@ -10078,7 +10078,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "battery connector"
+		(property "Value" "SM02B-SRSS-TB"
 			(at 71.12 34.2899 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10089,7 +10089,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Connector_JST:JST_PH_S2B-PH-SM4-TB_1x02-1MP_P2.00mm_Horizontal"
+		(property "Footprint" "Connector_JST:JST_SH_SM02B-SRSS-TB_1x02-1MP_P1.00mm_Horizontal"
 			(at 68.58 33.02 0)
 			(hide yes)
 			(show_name no)
@@ -10122,7 +10122,7 @@
 				)
 			)
 		)
-		(property "LCSC" "C295747"
+		(property "LCSC" ""
 			(at 68.58 33.02 0)
 			(hide yes)
 			(show_name no)
