@@ -1,0 +1,4 @@
+  (version 1)
+  (rule "U2 WSON exposed pad"
+    (condition "A.memberOfFootprint('U2') && B.memberOfFootprint('U2')")
+    (constraint clearance (min 0.15mm)))

@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolBuddy Live</title>
+<!--
+  SolBuddy live sensor view
+  --------------------------
+  Reads the Feather's USB serial output directly in the browser (Web Serial API,
+  Chrome / Edge only) and parses the EXACT text the current firmware prints:
+
+      TMP117 @ 2709: 22.81
+      AS7343 @ 3210:
+      F1  (405nm violet):     0
+      ...
+      VIS (clear):            22
+
+  How to run (Windows):
+    1. Close the Arduino Serial Monitor (Windows lets only one program open a COM port).
+    2. In the folder holding this file:   python -m http.server 8000
+    3. Open Chrome or Edge at:            http://localhost:8000/solbuddy-live.html
+    4. Click "Connect board" and pick the Feather's COM port.
+  "Demo" feeds fake lines in the same format through the same parser, no board needed.
+
+  No external libraries. Everything is in this file.
+-->
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#2a313c; --text:#e6edf3; --muted:#8b949e;
+    --accent:#58a6ff; --hot:#ff6b4a; --cold:#4aa8ff; --ok:#3fb950; --warn:#d29922;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
+         padding:16px 20px;border-bottom:1px solid var(--line)}
+  h1{font-size:18px;margin:0;font-weight:600;letter-spacing:.2px}
+  h1 small{color:var(--muted);font-weight:400;margin-left:8px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{background:#21262d;color:var(--text);border:1px solid var(--line);border-radius:8px;
+         padding:7px 12px;font:inherit;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:#1f6feb;border-color:#1f6feb}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .status{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+  .dot{width:9px;height:9px;border-radius:50%;background:#6e7681}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .dot.demo{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+  main{display:grid;grid-template-columns:minmax(240px,300px) 1fr;gap:16px;padding:16px 20px;max-width:1200px;margin:0 auto}
+  @media (max-width:760px){main{grid-template-columns:minmax(0,1fr);padding:16px}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:0 0 12px;font-weight:600}
+  .right{display:grid;gap:16px;min-width:0}
+  .card{min-width:0}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:760px){.row2{grid-template-columns:minmax(0,1fr)}}
+
+  /* thermometer */
+  .thermo{display:flex;gap:18px;align-items:center;justify-content:center}
+  .tempread{font-variant-numeric:tabular-nums}
+  .tempread .big{font-size:44px;font-weight:600;line-height:1}
+  .tempread .unit{font-size:18px;color:var(--muted)}
+  .tempread .sub{color:var(--muted);font-size:12px;margin-top:6px}
+  #mercury{transition:y .6s ease, height .6s ease, fill .6s ease}
+  #spark{width:100%;height:70px;display:block;margin-top:14px}
+
+  /* light orb */
+  .orbwrap{display:flex;align-items:center;justify-content:center;height:220px}
+  #orb{width:170px;height:170px;border-radius:50%;background:#000;
+       transition:background .5s ease, box-shadow .5s ease;border:1px solid #ffffff22}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .kv b{color:var(--text);font-weight:500}
+  .btnrow{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+
+  /* spectrum */
+  #spectrum{display:flex;align-items:flex-end;gap:6px;height:190px;padding-top:6px}
+  .bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0}
+  .bar .fill{width:100%;border-radius:4px 4px 0 0;transition:height .4s ease;min-height:1px}
+  .bar .val{font-size:10px;color:var(--muted);margin-bottom:3px;font-variant-numeric:tabular-nums}
+  .bar .lab{font-size:10px;color:var(--muted);margin-top:5px;text-align:center;white-space:nowrap;overflow:hidden;max-width:100%}
+  @media (max-width:760px){#spectrum{gap:2px}.bar .lab,.bar .val{font-size:8px}}
+  .bar.sat .fill{outline:2px solid var(--hot)}
+  .note{color:var(--muted);font-size:12px;margin-top:10px}
+  #log{background:#0b0e13;border:1px solid var(--line);border-radius:8px;height:140px;overflow:auto;
+       font:12px/1.4 ui-monospace,Consolas,monospace;color:#9da7b3;padding:8px;white-space:pre}
+  .warn{color:var(--warn)}
+</style>
+</head>
+<body>
+<header>
+  <h1>SolBuddy live <small>TMP117 + AS7343 over USB serial</small></h1>
+  <div class="controls">
+    <span class="status"><span id="dot" class="dot"></span><span id="statusText">Not connected</span></span>
+    <button id="btnConnect" class="primary">Connect board</button>
+    <button id="btnDemo">Demo</button>
+    <button id="btnStop" disabled>Stop</button>
+  </div>
+</header>
+
+<main>
+  <!-- LEFT: thermometer -->
+  <section class="card">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">Temperature · TMP117<button id="btnUnit" title="Switch °C / °F" style="padding:3px 10px;font-size:12px;text-transform:none;letter-spacing:0">°C → °F</button></h2>
+    <div class="thermo">
+      <svg width="70" height="260" viewBox="0 0 70 260" aria-label="thermometer">
+        <!-- tube: y from 20 to 200 is the scale -->
+        <rect x="25" y="10" width="20" height="200" rx="10" fill="#0b0e13" stroke="#3a424e"/>
+        <circle cx="35" cy="228" r="22" fill="#0b0e13" stroke="#3a424e"/>
+        <rect id="mercury" x="30" y="200" width="10" height="20" rx="5" fill="var(--hot)"/>
+        <circle id="bulb" cx="35" cy="228" r="16" fill="var(--hot)" style="transition:fill .6s ease"/>
+        <g id="ticks" font-size="9" fill="#8b949e"></g>
+      </svg>
+      <div class="tempread">
+        <div><span class="big" id="tempVal">--.--</span> <span class="unit" id="tempUnit">°C</span></div>
+        <div class="sub" id="tempDelta">waiting for data</div>
+        <div class="sub" id="tempRange"></div>
+      </div>
+    </div>
+    <canvas id="spark" width="600" height="140"></canvas>
+    <div class="note">Tip: pinch the TMP117 between two fingers and watch it climb.</div>
+  </section>
+
+  <div class="right">
+    <div class="row2">
+      <!-- light orb -->
+      <section class="card">
+        <h2>Light colour · AS7343</h2>
+        <div class="orbwrap"><div id="orb"></div></div>
+        <div class="kv">
+          <span>Approx. RGB</span><b id="rgbVal">–</b>
+          <span>VIS (clear)</span><b id="visVal">–</b>
+          <span>White balance</span><b id="wbVal">off (raw)</b>
+        </div>
+        <div class="btnrow">
+          <button id="btnWhite" disabled title="Under a light you call white, click this: per-channel gains are set so the current reading renders as neutral white.">Set current light as white</button>
+          <button id="btnWhiteReset">Reset</button>
+        </div>
+      </section>
+
+      <!-- how the colour is computed -->
+      <section class="card">
+        <h2>How the colour is made</h2>
+        <div class="note" style="margin-top:0">
+          1. Each visible channel (F1–F7, 405–690 nm) gets an approximate on-screen colour for its
+          centre wavelength (Dan Bruton's wavelength→RGB approximation).<br><br>
+          2. Those colours are summed, weighted by each channel's raw count
+          (× white-balance gain, if set).<br><br>
+          3. The sum is divided by its largest component → <b>hue</b>.
+          Brightness comes from log<sub>10</sub>(VIS), scaled to the brightest VIS seen so far.<br><br>
+          <span class="warn">This is a demo mapping, not colorimetry.</span> Raw counts aren't
+          corrected for each channel's sensitivity, gain or integration time, and F5/FY overlap near 550–555 nm.
+          A real colour needs the calibration matrix.
+        </div>
+      </section>
+    </div>
+
+    <!-- spectrum -->
+    <section class="card">
+      <h2>Spectrum · raw counts</h2>
+      <div id="spectrum"></div>
+      <div class="note" id="specNote">Bars auto-scale to the largest channel. A red outline means the value is ≥ the saturation threshold you set in code (see SAT_COUNTS).</div>
+    </section>
+
+    <section class="card">
+      <h2>Serial log</h2>
+      <div id="log"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+// ============================ configuration ============================
+const BAUD = 115200;           // ignored by native USB CDC on the nRF52840, but Web Serial requires a value
+const T_MIN = 15, T_MAX = 40;  // thermometer scale (°C). Change freely.
+// Saturation threshold for the red outline. Full scale depends on ATIME/ASTEP
+// (datasheet §10.2.2: max count = (ATIME+1)*(ASTEP+1), capped at 65535), which the
+// Adafruit library sets. It's unknown here, so leave it at 65535 until you check your settings.
+const SAT_COUNTS = 65535;
+
+// Channels in print order. Wavelengths are copied from the firmware's own labels.
+const CHANNELS = [
+  {id:'F1', nm:405}, {id:'F2', nm:425}, {id:'FZ', nm:450}, {id:'F3', nm:475},
+  {id:'F4', nm:515}, {id:'F5', nm:550}, {id:'FY', nm:555}, {id:'FXL',nm:600},
+  {id:'F6', nm:640}, {id:'F7', nm:690}, {id:'F8', nm:745}, {id:'NIR',nm:855},
+  {id:'VIS',nm:null}
+];
+const VISIBLE = ['F1','F2','FZ','F3','F4','F5','FY','FXL','F6','F7']; // used for the colour
+
+// ============================ parser ============================
+// Matches the current firmware output line-for-line.
+const RE_TEMP = /^TMP117\s*@\s*(\d+)\s*:\s*(-?\d+(?:\.\d+)?)/;
+const RE_AS   = /^AS7343\s*@\s*(\d+)\s*:/;
+const RE_CH   = /^(F1|F2|FZ|F3|F4|F5|FY|FXL|F6|F7|F8|NIR|VIS)\s*\([^)]*\)\s*:\s*(\d+)/;
+
+let pending = null;   // spectral block being assembled
+function parseLine(raw){
+  const line = raw.replace(/\r/g,'').trim();
+  if(!line) return;
+  let m;
+  if((m = RE_TEMP.exec(line))){ onTemp(+m[2], +m[1]); return; }
+  if((m = RE_AS.exec(line)))  { pending = {t:+m[1], ch:{}}; return; }
+  if(pending && (m = RE_CH.exec(line))){
+    pending.ch[m[1]] = +m[2];
+    if(m[1] === 'VIS'){               // VIS is the last line of each block
+      const missing = CHANNELS.filter(c => !(c.id in pending.ch)).map(c=>c.id);
+      if(missing.length) log('incomplete AS7343 block, missing ' + missing.join(','), true);
+      else onSpectrum(pending.ch, pending.t);
+      pending = null;
+    }
+  }
+}
+
+// ============================ temperature view ============================
+const tempHist = [];
+let tempStart = null;
+// Display unit. The TMP117 reports °C; °F is computed only for display:
+//   °F = °C × 9/5 + 32   (a temperature difference converts with × 9/5 only, no +32)
+let unitF = false;
+const toU  = c => unitF ? c*9/5 + 32 : c;   // absolute temperature
+const dToU = d => unitF ? d*9/5 : d;        // temperature difference
+const uLab = () => unitF ? '°F' : '°C';
+let lastTemp = null, lastMs = 0;
+
+function drawTicks(){
+  const g = document.getElementById('ticks');
+  g.innerHTML = '';
+  for(let t=T_MIN; t<=T_MAX; t+=5){
+    const y = tempToY(t);
+    g.insertAdjacentHTML('beforeend',
+      `<line x1="45" x2="52" y1="${y}" y2="${y}" stroke="#3a424e"/>` +
+      `<text x="54" y="${y+3}">${Math.round(toU(t))}</text>`);
+  }
+}
+drawTicks();
+function tempToY(t){ // scale runs from y=200 (T_MIN) to y=20 (T_MAX)
+  const f = Math.min(1, Math.max(0, (t - T_MIN)/(T_MAX - T_MIN)));
+  return 200 - f*180;
+}
+function tempColor(t){ // blue at T_MIN → red at T_MAX
+  const f = Math.min(1, Math.max(0, (t - T_MIN)/(T_MAX - T_MIN)));
+  const c1=[74,168,255], c2=[255,107,74];
+  return `rgb(${c1.map((v,i)=>Math.round(v+(c2[i]-v)*f)).join(',')})`;
+}
+function onTemp(c, ms){
+  if(tempStart === null) tempStart = c;
+  lastTemp = c; lastMs = ms;
+  tempHist.push(c); if(tempHist.length > 120) tempHist.shift();
+  renderTemp();
+}
+function renderTemp(){
+  const c = lastTemp, ms = lastMs;
+  document.getElementById('tempUnit').textContent = uLab();
+  if(c === null) return;
+  const y = tempToY(c), col = tempColor(c);
+  const merc = document.getElementById('mercury');
+  merc.setAttribute('y', y); merc.setAttribute('height', 222 - y);
+  merc.setAttribute('fill', col);
+  document.getElementById('bulb').setAttribute('fill', col);
+  document.getElementById('tempVal').textContent = toU(c).toFixed(2);
+  const d = c - tempStart;
+  document.getElementById('tempDelta').textContent =
+    `${d>=0?'+':''}${dToU(d).toFixed(2)} ${uLab()} since start · t=${(ms/1000).toFixed(1)} s`;
+  const lo = Math.min(...tempHist), hi = Math.max(...tempHist);
+  document.getElementById('tempRange').textContent = `min ${toU(lo).toFixed(2)} · max ${toU(hi).toFixed(2)} ${uLab()} (last ${tempHist.length})`;
+  drawSpark();
+}
+function drawSpark(){
+  const cv = document.getElementById('spark'), ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0,0,W,H);
+  if(tempHist.length < 2) return;
+  let lo = Math.min(...tempHist), hi = Math.max(...tempHist);
+  if(hi - lo < 0.2){ const m=(hi+lo)/2; lo=m-0.1; hi=m+0.1; } // keep 0.01 °C noise from filling the chart
+  ctx.lineWidth = 3; ctx.strokeStyle = tempColor(tempHist.at(-1)); ctx.beginPath();
+  tempHist.forEach((v,i)=>{
+    const x = i/(tempHist.length-1)*(W-10)+5, y = H-8 - (v-lo)/(hi-lo)*(H-16);
+    i ? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = '#8b949e'; ctx.font = '20px system-ui';
+  ctx.fillText(toU(hi).toFixed(2), 8, 22); ctx.fillText(toU(lo).toFixed(2), 8, H-10);
+}
+
+document.getElementById('btnUnit').onclick = ()=>{
+  unitF = !unitF;
+  try{ localStorage.setItem('solbuddy-unit', unitF ? 'F' : 'C'); }catch{}
+  document.getElementById('btnUnit').textContent = unitF ? '°F → °C' : '°C → °F';
+  drawTicks(); renderTemp(); drawSpark();
+};
+try{ if(localStorage.getItem('solbuddy-unit') === 'F') document.getElementById('btnUnit').click(); }catch{}
+
+// ============================ colour view ============================
+// Dan Bruton's wavelength→RGB approximation (piecewise linear, 380–780 nm).
+function wl2rgb(w){
+  let r=0,g=0,b=0;
+  if(w>=380&&w<440){r=-(w-440)/60; b=1;}
+  else if(w<490){g=(w-440)/50; b=1;}
+  else if(w<510){g=1; b=-(w-510)/20;}
+  else if(w<580){r=(w-510)/70; g=1;}
+  else if(w<645){r=1; g=-(w-645)/65;}
+  else if(w<=780){r=1;}
+  // eye-sensitivity falloff at the ends of the visible band
+  let k = 1;
+  if(w<420) k = 0.3 + 0.7*(w-380)/40;
+  else if(w>700) k = 0.3 + 0.7*(780-w)/80;
+  return [r*k, g*k, b*k];
+}
+let wbGain = null;        // per-channel white-balance gains, null = off
+let visMax = 1;           // brightest VIS seen, sets the brightness scale
+let lastCh = null;
+
+function mixRGB(ch){
+  let R=0,G=0,B=0;
+  for(const id of VISIBLE){
+    const nm = CHANNELS.find(c=>c.id===id).nm;
+    const g = wbGain ? wbGain[id] : 1;
+    const [r,gg,b] = wl2rgb(nm);
+    R += ch[id]*g*r; G += ch[id]*g*gg; B += ch[id]*g*b;
+  }
+  return [R,G,B];
+}
+function onSpectrum(ch, ms){
+  lastCh = ch;
+  document.getElementById('btnWhite').disabled = false;
+  const [R,G,B] = mixRGB(ch);
+  const m = Math.max(R,G,B);
+  let hue = m > 0 ? [R/m, G/m, B/m] : [0,0,0];
+  // brightness: log scale so room light and a torch both look like something
+  visMax = Math.max(visMax, ch.VIS);
+  const lvl = ch.VIS > 0 ? Math.min(1, Math.log10(ch.VIS+1)/Math.log10(visMax+1)) : 0;
+  const bright = 0.12 + 0.88*lvl;
+  const rgb = hue.map(v => Math.round(255*v*bright));
+  const css = `rgb(${rgb.join(',')})`;
+  const orb = document.getElementById('orb');
+  orb.style.background = `radial-gradient(circle at 35% 30%, rgb(${rgb.map(v=>Math.min(255,v+60)).join(',')}), ${css} 55%, rgb(${rgb.map(v=>v*0.55|0).join(',')}))`;
+  orb.style.boxShadow = `0 0 ${20+70*lvl}px ${8+30*lvl}px rgba(${rgb.join(',')},${0.25+0.5*lvl})`;
+  document.getElementById('rgbVal').textContent = `${rgb.join(', ')}`;
+  document.getElementById('visVal').textContent = `${ch.VIS} (max seen ${visMax})`;
+  drawSpectrum(ch);
+}
+
+// ============================ spectrum bars ============================
+const specEl = document.getElementById('spectrum');
+CHANNELS.forEach(c=>{
+  const col = c.nm && c.nm <= 700 ? `rgb(${wl2rgb(c.nm).map(v=>Math.round(40+215*v)).join(',')})`
+            : c.nm ? '#7a4a5a' : '#c9d1d9';
+  specEl.insertAdjacentHTML('beforeend',
+    `<div class="bar" id="bar-${c.id}"><div class="val">–</div>` +
+    `<div class="fill" style="height:1px;background:${col}"></div>` +
+    `<div class="lab">${c.id}<br>${c.nm ? c.nm : 'clear'}</div></div>`);
+});
+function drawSpectrum(ch){
+  const mx = Math.max(1, ...CHANNELS.map(c=>ch[c.id]));
+  CHANNELS.forEach(c=>{
+    const el = document.getElementById('bar-'+c.id), v = ch[c.id];
+    el.querySelector('.fill').style.height = `${Math.max(1, v/mx*150)}px`;
+    el.querySelector('.val').textContent = v;
+    el.classList.toggle('sat', v >= SAT_COUNTS);
+  });
+}
+
+// ============================ white balance ============================
+document.getElementById('btnWhite').onclick = ()=>{
+  if(!lastCh) return;
+  // Gains that make every visible channel contribute equally under the current light.
+  // Channels reading 0 (e.g. F1 in dim light) can't be balanced; they keep gain 1.
+  const vals = VISIBLE.map(id=>lastCh[id]).filter(v=>v>0);
+  const mean = vals.reduce((a,b)=>a+b,0)/vals.length;
+  wbGain = {};
+  VISIBLE.forEach(id => wbGain[id] = lastCh[id] > 0 ? mean/lastCh[id] : 1);
+  const low = VISIBLE.filter(id=>lastCh[id] < 20);
+  document.getElementById('wbVal').innerHTML = 'on' + (low.length ?
+    ` <span class="warn">(noisy: ${low.join(',')} &lt;20 counts, try a brighter light)</span>` : '');
+  onSpectrum(lastCh, 0);
+};
+document.getElementById('btnWhiteReset').onclick = ()=>{
+  wbGain = null; visMax = 1;
+  document.getElementById('wbVal').textContent = 'off (raw)';
+  if(lastCh) onSpectrum(lastCh, 0);
+};
+
+// ============================ log ============================
+const logEl = document.getElementById('log');
+function log(s, warn){
+  const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 5;
+  logEl.insertAdjacentHTML('beforeend', (warn?'<span class="warn">':'') +
+    s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])) + (warn?'</span>':'') + '\n');
+  while(logEl.childNodes.length > 800) logEl.removeChild(logEl.firstChild);
+  if(atBottom) logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ============================ transport: Web Serial ============================
+let port = null, reader = null, demoTimer = null, running = false;
+const $ = id => document.getElementById(id);
+function setStatus(txt, cls){ $('statusText').textContent = txt; $('dot').className = 'dot ' + (cls||''); }
+function setRunning(on){ running = on; $('btnConnect').disabled = on; $('btnDemo').disabled = on; $('btnStop').disabled = !on; }
+
+if(!('serial' in navigator)){
+  $('btnConnect').disabled = true;
+  setStatus('Web Serial unavailable: use Chrome/Edge on http://localhost');
+}
+
+$('btnConnect').onclick = async ()=>{
+  try{
+    port = await navigator.serial.requestPort();   // Windows shows the COM-port picker
+    await port.open({ baudRate: BAUD });
+    setStatus('Connected', 'on'); setRunning(true); log('--- connected ---');
+    readLoop();
+  }catch(e){
+    log('connect failed: ' + e.message + ' (is the Serial Monitor still open?)', true);
+    setStatus('Not connected');
+  }
+};
+async function readLoop(){
+  const decoder = new TextDecoderStream();
+  const closed = port.readable.pipeTo(decoder.writable).catch(()=>{});
+  reader = decoder.readable.getReader();
+  let buf = '';
+  try{
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      buf += value;
+      let i;
+      while((i = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0,i); buf = buf.slice(i+1);
+        log(line.replace(/\r/g,'')); parseLine(line);
+      }
+    }
+  }catch(e){ log('read error: ' + e.message, true); }
+  finally{
+    try{ reader.releaseLock(); }catch{}
+    await closed;
+    try{ await port.close(); }catch{}
+    setStatus('Disconnected'); setRunning(false); log('--- disconnected ---');
+  }
+}
+$('btnStop').onclick = async ()=>{
+  if(demoTimer){ clearInterval(demoTimer); demoTimer = null; setStatus('Demo stopped'); setRunning(false); return; }
+  if(reader){ try{ await reader.cancel(); }catch{} }
+};
+navigator.serial?.addEventListener('disconnect', ()=> log('board unplugged', true));
+
+// ============================ demo: fake lines in the firmware's format ============================
+// Emits text through parseLine() so the demo exercises the real parser.
+const LABELS = {F1:'405nm violet',F2:'425nm violet-blue',FZ:'450nm blue',F3:'475nm blue-cyan',
+  F4:'515nm green',F5:'550nm green-yel',FY:'555nm yellow-grn',FXL:'600nm orange',F6:'640nm red',
+  F7:'690nm deep red',F8:'745nm near-IR',NIR:'855nm near-IR',VIS:'clear'};
+// Shapes loosely based on your pasted log (room light, then the bright burst at t≈18 s).
+const SCENES = [
+  {name:'room', k:1,   s:{F1:0,F2:1,FZ:5,F3:6,F4:9,F5:4,FY:16,FXL:18,F6:28,F7:7,F8:0,NIR:0,VIS:22}},
+  {name:'bright white', k:1, s:{F1:1520,F2:1660,FZ:2768,F3:2398,F4:2798,F5:1740,FY:4398,FXL:4100,F6:4199,F7:2514,F8:961,NIR:1103,VIS:5576}},
+  {name:'blue LED', k:1, s:{F1:40,F2:600,FZ:2600,F3:1500,F4:200,F5:30,FY:60,FXL:10,F6:5,F7:2,F8:0,NIR:0,VIS:1900}},
+  {name:'red LED',  k:1, s:{F1:0,F2:2,FZ:5,F3:5,F4:10,F5:12,FY:60,FXL:700,F6:2600,F7:900,F8:30,NIR:5,VIS:1700}},
+  {name:'green LED',k:1, s:{F1:0,F2:5,FZ:60,F3:500,F4:2400,F5:1500,FY:1900,FXL:300,F6:40,F7:5,F8:0,NIR:0,VIS:2100}},
+];
+$('btnDemo').onclick = ()=>{
+  setStatus('Demo (fake data)', 'demo'); setRunning(true); log('--- demo: synthetic data in firmware format ---');
+  let ms = 2709, temp = 22.8, n = 0;
+  const lines = ['Adafruit TMP117 & AS7343 test','TMP117 Found!','AS7343 found!'];
+  lines.forEach(l=>{ log(l); parseLine(l); });
+  demoTimer = setInterval(()=>{
+    const scene = SCENES[Math.floor(n/5) % SCENES.length]; n++;
+    // temperature: slow wander, plus a "finger on sensor" warm-up every ~40 s
+    const warming = (n % 40) > 25 && (n % 40) < 34;
+    temp += warming ? 0.9 : (22.85 - temp)*0.15 + (Math.random()-0.5)*0.02;
+    const out = [`TMP117 @ ${ms}: ${temp.toFixed(2)}`, '', `AS7343 @ ${ms+501}: `];
+    for(const id of Object.keys(LABELS)){
+      const v = Math.max(0, Math.round(scene.s[id]*(1+(Math.random()-0.5)*0.08)));
+      out.push(`${(id+'   ').slice(0,3)} (${LABELS[id]}):`.padEnd(24) + v);
+    }
+    out.push('');
+    out.forEach(l=>{ log(l); parseLine(l); });
+    ms += 1000;
+  }, 1000);
+};
+</script>
+</body>
+</html>
