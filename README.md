@@ -2,3 +2,4 @@
 ![Back of the pcb](pcb/back_pcb.png)
 ![Side of the pcb](pcb/side_pcb.png)
 ![Schematic](pcb/schematic.png)
+![Block diagram](pcb/solbuddy_block_diagram.png)
