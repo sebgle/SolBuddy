@@ -19,6 +19,13 @@ static as7343_result_t read_reg(uint8_t reg, uint8_t *value)
     return from_i2c(i2c_write_read(AS7343_I2C_ADDR, tx, sizeof tx, value, 1));
 }
 
+/* Consecutive registers in one transfer; the chip auto-increments (§9). */
+static as7343_result_t read_regs(uint8_t first_reg, uint8_t *buf, size_t len)
+{
+    uint8_t tx[1] = { first_reg };
+    return from_i2c(i2c_write_read(AS7343_I2C_ADDR, tx, sizeof tx, buf, len));
+}
+
 static as7343_result_t write_reg(uint8_t reg, uint8_t value)
 {
     uint8_t tx[2] = { reg, value };
@@ -145,4 +152,66 @@ as7343_result_t as7343_init(void)
 
     if (r != AS7343_OK) return r;
     return r_off;
+}
+
+as7343_result_t as7343_start_measurement(void)
+{
+    /* §10.2.1: oscillator on (PON) first, then start the measurement. */
+    as7343_result_t r = modify_reg(AS7343_REG_ENABLE, AS7343_ENABLE_PON_MASK,
+                                   AS7343_ENABLE_PON_MASK);
+    if (r != AS7343_OK) return r;
+
+    return modify_reg(AS7343_REG_ENABLE, AS7343_ENABLE_SP_EN_MASK,
+                      AS7343_ENABLE_SP_EN_MASK);
+}
+
+as7343_result_t as7343_data_ready(bool *ready)
+{
+    uint8_t status2 = 0;
+    as7343_result_t r = read_reg(AS7343_REG_STATUS2, &status2);
+
+    *ready = (r == AS7343_OK) && (status2 & AS7343_STATUS2_AVALID_MASK);
+    return r;
+}
+
+_Static_assert(AS7343_FRAME_BYTE_COUNT == 1u + 2u * AS7343_DATA_SLOT_COUNT,
+               "frame = ASTATUS + 18 low/high pairs");
+
+as7343_result_t as7343_read(as7343_reading_t *reading)
+{
+    bool ready = false;
+    as7343_result_t r = as7343_data_ready(&ready);
+    if (r != AS7343_OK) return r;
+    if (!ready) return AS7343_ERR_NOT_READY;
+
+    /* Observed on hardware (undocumented): the first ASTATUS read after a
+     * measurement returns 0x00 — that read performs the latch. A second
+     * read returns the real gain/saturation status. So: one latch read,
+     * discarded, then the full frame. */
+    uint8_t latch;
+    r = read_reg(AS7343_REG_ASTATUS, &latch);
+    if (r != AS7343_OK) return r;
+
+    /* ASTATUS + 36 data bytes in one burst: reading ASTATUS latches the
+     * data, so everything in this frame belongs to the same measurement. */
+    uint8_t frame[AS7343_FRAME_BYTE_COUNT];
+    r = read_regs(AS7343_REG_ASTATUS, frame, sizeof frame);
+    if (r != AS7343_OK) return r;
+
+    uint8_t astatus = frame[0];
+    reading->gain      = (uint8_t)((astatus & AS7343_ASTATUS_AGAIN_MASK) >> AS7343_ASTATUS_AGAIN_POS);
+    reading->saturated = (astatus & AS7343_ASTATUS_ASAT_MASK) != 0u;
+
+    for (uint32_t i = 0; i < AS7343_DATA_SLOT_COUNT; i++) {
+        uint8_t low  = frame[1u + 2u * i];
+        uint8_t high = frame[2u + 2u * i];
+        reading->counts[i] = (uint16_t)(low | (high << 8));
+    }
+    return AS7343_OK;
+}
+
+as7343_result_t as7343_sleep(void)
+{
+    return modify_reg(AS7343_REG_ENABLE,
+                      AS7343_ENABLE_PON_MASK | AS7343_ENABLE_SP_EN_MASK, 0u);
 }

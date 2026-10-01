@@ -58,9 +58,12 @@ Status: verified on Feather nRF52840 Express + Adafruit AS7343 breakout
 
 ## drivers/AS7343 — spectral sensor
 
-Status: `as7343_init()` (ID check + full configuration, leaves sensor asleep)
-verified on Feather + Adafruit breakout (2026-10-01), including after
-deliberately scribbling non-default values first.
+Status (verified on Feather + Adafruit breakout, 2026-10-01):
+- `as7343_init()` — ID check + full configuration, leaves sensor asleep;
+  verified after deliberately scribbling non-default values first.
+- `as7343_start_measurement()` / `data_ready()` / `read()` / `sleep()` —
+  18-channel measurement with correct gain and saturation reporting, in
+  room light and under a phone flashlight.
 
 ### Known limitations
 
@@ -73,6 +76,12 @@ deliberately scribbling non-default values first.
    bootloader runs far longer than that before our code starts.
 3. **Init leaves CFG0.LOW_POWER and WLONG untouched.** Irrelevant while WEN
    is off and the sensor sleeps via PON = 0.
+4. **Open, not reproduced: one 59 ms measurement.** The very first
+   measurement after flashing the chunk-3 firmware reported AVALID after
+   59 ms (≈ one cycle) instead of ~161 ms (three cycles). Did not recur in
+   later runs or after a reset. If it did, slots 6-17 of that sample would
+   be stale. Watch for it; a defensive check would be a minimum elapsed
+   time before accepting AVALID.
 
 ### Verified on hardware / against documentation
 
@@ -85,3 +94,18 @@ deliberately scribbling non-default values first.
   hold 0x02.** Undocumented, preserved by read-modify-write — never write
   CFG20 blindly.
 - CFG3 reserved low nibble reads 0xC after init, as documented.
+- **Slot naming:** six ADCs → six slots per cycle (§8.1), so CFG20's
+  "2xVIS" is one CLEAR slot, not two. Slots 4/10/16 = CLEAR, 5/11/17 = FD.
+- **AVALID in 18-channel mode is set only after all three cycles:**
+  ~161 ms from start at ATIME 29 / ASTEP 599 (3 × 50 ms + overhead).
+  It is 0 right after start, and reading the data clears it.
+- **Undocumented: the first ASTATUS read after a measurement returns 0x00.**
+  That read performs the latch; a second read returns the real status
+  (e.g. 0x09 = gain 256x, 0x89 = gain 256x + saturated). Stopping the
+  measurement first (SP_EN = 0) does not help. `as7343_read()` therefore
+  does one discarded 1-byte ASTATUS read, then the 37-byte burst. Data
+  bytes are fresh on the first read; only the status byte lags.
+- STATUS2 reads 0x44 normally and 0x4C when saturated: AVALID (0x40) +
+  ASAT_ANALOG (0x08) + **reserved bit 2 (0x04), always set.**
+- ASAT_DIGITAL (STATUS2 bit 4) did not set with counts at 17999 against a
+  full scale of 18000; ASTATUS.ASAT_STATUS did. Use ASTATUS for saturation.

@@ -225,6 +225,10 @@
  *
  * CLEAR and FD readings repeat across the three cycles.
  * FD slots contain raw ADC readings, not flicker classifications.
+ *
+ * Six ADCs -> six slots per cycle (§8.1). The CFG20 table's "2xVIS" is
+ * ONE slot: the top-left and bottom-right clear photodiodes read together.
+ * (Some libraries split it into VIS_TL/VIS_BR; that is not six per cycle.)
  */
 
 #endif
