@@ -12,9 +12,11 @@
 #define OFF_SEQ         8u
 #define OFF_TIMESTAMP   12u
 #define OFF_COUNTS      16u
+#define OFF_BOOT_ID     52u
 #define OFF_CRC         62u
 
-_Static_assert(OFF_COUNTS + 2u * AS7343_DATA_SLOT_COUNT <= OFF_CRC, "counts overlap CRC");
+_Static_assert(OFF_COUNTS + 2u * AS7343_DATA_SLOT_COUNT <= OFF_BOOT_ID, "counts overlap boot_id");
+_Static_assert(OFF_BOOT_ID + 2u <= OFF_CRC, "boot_id overlaps CRC");
 _Static_assert(OFF_CRC + 2u == RECORD_SIZE, "CRC must be the last two bytes");
 
 /* Little-endian helpers: byte order is explicit, independent of the CPU. */
@@ -44,7 +46,8 @@ static uint32_t get_u32(const uint8_t *p)
 }
 
 void record_from_reading(record_t *rec, const as7343_reading_t *reading,
-                         uint32_t seq, uint32_t timestamp, uint8_t extra_flags)
+                         uint32_t seq, uint32_t timestamp, uint16_t boot_id,
+                         uint8_t extra_flags)
 {
     rec->seq       = seq;
     rec->timestamp = timestamp;
@@ -52,6 +55,7 @@ void record_from_reading(record_t *rec, const as7343_reading_t *reading,
     rec->gain      = reading->gain;
     rec->atime     = reading->atime;
     rec->astep     = reading->astep;
+    rec->boot_id   = boot_id;
     memcpy(rec->counts, reading->counts, sizeof rec->counts);
 }
 
@@ -66,6 +70,7 @@ void record_pack(const record_t *rec, uint8_t out[RECORD_SIZE])
     put_u16(&out[OFF_ASTEP], rec->astep);
     put_u32(&out[OFF_SEQ], rec->seq);
     put_u32(&out[OFF_TIMESTAMP], rec->timestamp);
+    put_u16(&out[OFF_BOOT_ID], rec->boot_id);
     for (uint32_t i = 0; i < AS7343_DATA_SLOT_COUNT; i++) {
         put_u16(&out[OFF_COUNTS + 2u * i], rec->counts[i]);
     }
@@ -90,6 +95,7 @@ record_result_t record_unpack(const uint8_t in[RECORD_SIZE], record_t *rec)
     rec->astep     = get_u16(&in[OFF_ASTEP]);
     rec->seq       = get_u32(&in[OFF_SEQ]);
     rec->timestamp = get_u32(&in[OFF_TIMESTAMP]);
+    rec->boot_id   = get_u16(&in[OFF_BOOT_ID]);
     for (uint32_t i = 0; i < AS7343_DATA_SLOT_COUNT; i++) {
         rec->counts[i] = get_u16(&in[OFF_COUNTS + 2u * i]);
     }

@@ -14,7 +14,8 @@
  *   8     4   seq         sequence number
  *  12     4   timestamp   seconds (UTC, or since boot if TIME_UNSET)
  *  16    36   counts[18]  raw counts, AS7343_SLOT_* order
- *  52    10   spare       0
+ *  52     2   boot_id     boot number: separates boots when TIME_UNSET
+ *  54     8   spare       0
  *  62     2   crc16       CRC-16/CCITT-FALSE over bytes 0-61
  *
  * All multi-byte fields little-endian.
@@ -43,6 +44,7 @@ typedef struct {
     uint8_t  gain;
     uint8_t  atime;
     uint16_t astep;
+    uint16_t boot_id;
     uint16_t counts[AS7343_DATA_SLOT_COUNT];
 } record_t;
 
@@ -55,7 +57,8 @@ typedef enum {
 
 /* Fill a record from a sensor reading. extra_flags: e.g. CHARGING, TIME_UNSET. */
 void record_from_reading(record_t *rec, const as7343_reading_t *reading,
-                         uint32_t seq, uint32_t timestamp, uint8_t extra_flags);
+                         uint32_t seq, uint32_t timestamp, uint16_t boot_id,
+                         uint8_t extra_flags);
 
 void record_pack(const record_t *rec, uint8_t out[RECORD_SIZE]);
 

@@ -19,7 +19,7 @@
 #define RAM_START           0x20000000u
 #define RAM_END             0x20040000u
 
-static void configure_pin(uint32_t pin)
+static void configure_pin(uint32_t pin, uint32_t pull)
 {
     NRF_GPIO_Type *port = (pin >> 5) ? NRF_P1 : NRF_P0;
 
@@ -27,7 +27,7 @@ static void configure_pin(uint32_t pin)
     port->PIN_CNF[pin & 0x1Fu] =
         (GPIO_PIN_CNF_DIR_Input      << GPIO_PIN_CNF_DIR_Pos)   |
         (GPIO_PIN_CNF_INPUT_Connect  << GPIO_PIN_CNF_INPUT_Pos) |
-        (GPIO_PIN_CNF_PULL_Disabled  << GPIO_PIN_CNF_PULL_Pos)  |
+        (pull                        << GPIO_PIN_CNF_PULL_Pos)  |
         (GPIO_PIN_CNF_DRIVE_H0H1     << GPIO_PIN_CNF_DRIVE_Pos) |
         (GPIO_PIN_CNF_SENSE_Disabled << GPIO_PIN_CNF_SENSE_Pos);
 }
@@ -55,12 +55,16 @@ static bool dma_args_ok(uint32_t addr, const void *buf, size_t len)
 
 qspi_result_t qspi_init(void)
 {
-    configure_pin(BOARD_QSPI_SCK);
-    configure_pin(BOARD_QSPI_CS);
-    configure_pin(BOARD_QSPI_IO0);
-    configure_pin(BOARD_QSPI_IO1);
-    configure_pin(BOARD_QSPI_IO2);
-    configure_pin(BOARD_QSPI_IO3);
+    configure_pin(BOARD_QSPI_SCK, GPIO_PIN_CNF_PULL_Disabled);
+    configure_pin(BOARD_QSPI_CS,  GPIO_PIN_CNF_PULL_Disabled);
+    configure_pin(BOARD_QSPI_IO0, GPIO_PIN_CNF_PULL_Disabled);
+    /* IO1 is the flash's data-out. ACTIVATE polls the flash's busy bit, but
+     * our flash is in deep power-down then and drives nothing: a floating
+     * IO1 read as "busy" stalled ACTIVATE for 50-280 ms at random (seen on
+     * hardware). The pull-down makes an undriven IO1 read 0 = not busy. */
+    configure_pin(BOARD_QSPI_IO1, GPIO_PIN_CNF_PULL_Pulldown);
+    configure_pin(BOARD_QSPI_IO2, GPIO_PIN_CNF_PULL_Disabled);
+    configure_pin(BOARD_QSPI_IO3, GPIO_PIN_CNF_PULL_Disabled);
 
     NRF_QSPI->ENABLE   = QSPI_ENABLE_ENABLE_Disabled << QSPI_ENABLE_ENABLE_Pos;
     NRF_QSPI->PSEL.SCK = BOARD_QSPI_SCK;

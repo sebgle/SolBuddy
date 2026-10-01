@@ -8,6 +8,7 @@
 
 static ringlog_t s_log;
 static uint32_t  s_flash_size;
+static uint16_t  s_boot_id;
 
 static void sleep_ms(uint32_t ms)
 {
@@ -71,8 +72,30 @@ storage_result_t storage_init(void)
     uint32_t sectors = s_flash_size / RINGLOG_SECTOR_SIZE - RESERVED_SECTORS;
     ringlog_result_t r = ringlog_mount(&s_log, &FLASH_OPS,
                                        RESERVED_SECTORS * RINGLOG_SECTOR_SIZE, sectors);
+
+    /* This boot's number: one more than the newest readable record's.
+     * Walk back past damaged records (at most one sector's worth, so boot
+     * time stays bounded); an empty log starts at boot 0. */
+    s_boot_id = 0;
+    if (r == RINGLOG_OK) {
+        uint32_t oldest = ringlog_oldest_seq(&s_log);
+        uint32_t limit  = RINGLOG_RECORDS_PER_SECTOR;
+        for (uint32_t seq = s_log.next_seq; seq > oldest && limit > 0u; seq--, limit--) {
+            record_t newest;
+            if (ringlog_read(&s_log, seq - 1u, &newest) == RINGLOG_OK) {
+                s_boot_id = (uint16_t)(newest.boot_id + 1u);
+                break;
+            }
+        }
+    }
+
     session_end();
     return from_ringlog(r);
+}
+
+uint16_t storage_boot_id(void)
+{
+    return s_boot_id;
 }
 
 storage_result_t storage_append(record_t *rec)

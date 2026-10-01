@@ -172,6 +172,8 @@ Status: verified on Feather (GD25Q16C), 2026-10-01.
 - Custom instructions: LENGTH counts the opcode; IO2/IO3 (WP#/HOLD#) held
   high via LIO2/LIO3.
 - Errata [122] current fix applied in qspi_uninit (before ENABLE = 0).
+- IO1 has an internal pull-down: ACTIVATE polls the flash's WIP bit, and a
+  flash in deep power-down leaves IO1 floating (see app/storage item 1).
 - **Do not use the peripheral's own deep power-down (IFCONFIG0.DPMENABLE /
   IFCONFIG1.DPMEN).** On hardware, entering DPM left STATUS = 0x06
   (DPM = 1, READY = BUSY) and no READY event ever came; custom
@@ -205,10 +207,16 @@ reset the log resumed at the next seq (6) instead of restarting. Mount of
   work, chip to deep power-down, QSPI off (errata [122] fix).
 
 ### Known limitations / open
-1. **Open: first append after boot takes 257-280 ms** (later ones 2 ms),
-   even when it is not a sector start. Cause not yet identified — time each
-   step of session_begin (qspi_init, wake, wait_while_busy, RDID).
-   Impact small (once per boot) but should be understood.
+1. **Fixed 2026-10-01: occasional 50-280 ms QSPI ACTIVATE stall.** Timed
+   step by step: all of it was the ACTIVATE -> READY wait (up to 880k
+   polls, 44 % of the poll limit). Ruled out: scheduler preemption (poll
+   count matched wall time), HF clock (HFXO running throughout), DPMDUR
+   reset value (writing it changed nothing). Cause: ACTIVATE polls the
+   flash's busy bit, but the flash is in deep power-down and leaves IO1
+   (its data-out) floating; reading it as "busy" stalled at random. Fix:
+   internal pull-down on IO1. Verified: first append 13 polls / 2 ms.
+   PCB: the MX25R floats IO1 the same way in DPM; the internal pull-down
+   covers it (an external pull-down is not needed).
 2. **No lock.** Sampling and (future) BLE sync must not use storage at the
    same time — same as hal/i2c; see deferred_decisions.md #6.
 3. **Reads are one session per record.** Batch for BLE sync later.
@@ -229,3 +237,18 @@ to the PC-only bus in src/hal/host).
 - Not used: quick-start (can corrupt SOC), custom model (TABLE), sleep mode.
 - Datasheet note 6: the gauge enters shutdown if SDA and SCL are both low
   > 2.5 s — keep the I2C pull-ups powered whenever the gauge should run.
+
+## services/timekeeper + app/clock — device time
+
+Status: 10 unit tests (incl. 100 simulated days / two counter wraps);
+verified on Feather 2026-10-01: uptime timestamps flagged TIME_UNSET,
+UTC after set_utc (3 s spacing exact), boot_id 1 -> 2 across a reset.
+
+- Source: FreeRTOS tick count (1024 Hz, 32.768 kHz crystal, counts through
+  tickless sleep). No extra RTC: RTC0 = SoftDevice, RTC1 = FreeRTOS.
+- 32-bit tick counter wraps every ~48.5 days; extended to 64 bits by
+  unsigned-difference accumulation. Must be read at least once per wrap.
+- UTC anchored to the exact tick it was set (no rounding drift).
+- System OFF (LOW-BATT) and any reset lose UTC: the next boot logs uptime
+  until the phone sets time again.
+- Record format: boot_id added at bytes 52-53 (spare now 54-61).

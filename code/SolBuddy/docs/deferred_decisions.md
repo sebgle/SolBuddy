@@ -36,11 +36,6 @@ Format: **question** — context, options, what it blocks.
 
 ### Logging
 
-4. **Timestamp before the phone has set the clock.** After first boot or
-   a full power loss the RTC has no UTC. Options: log uptime + boot counter
-   and let the app re-base later; or don't log until time is set.
-   *Blocks:* record format, RTC/time service.
-
 ### Firmware structure
 
 6. **I2C bus lock.** `hal/i2c` has no mutex. Needed once two FreeRTOS
@@ -70,6 +65,13 @@ Format: **question** — context, options, what it blocks.
 ---
 
 ## Decided
+
+- **2026-10-01 — Timestamps before the phone sets UTC:** log seconds since
+  boot with RECORD_FLAG_TIME_UNSET, plus a 16-bit boot_id (record bytes
+  52-53) = newest stored record's boot_id + 1 (no extra flash writes).
+  At sync the device reports (boot_id, uptime, UTC) so the app can re-base
+  that boot's records; records from a boot that never saw the phone stay
+  relative but ordered.
 
 - **2026-10-01 — QSPI pins stay as routed (no CS/SCK swap).** PCB: CS
   P0.19, SCK P0.20, IO0 P0.21, IO1 P0.22, IO2 P0.23, IO3 P0.24. Nordic

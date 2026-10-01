@@ -35,6 +35,10 @@ storage_result_t storage_append(record_t *rec);
 /* Read one record by sequence number. */
 storage_result_t storage_read(uint32_t seq, record_t *rec);
 
+/* Boot number for this boot: newest stored record's boot_id + 1 (0 if the
+ * log is empty). Valid after storage_init. */
+uint16_t storage_boot_id(void);
+
 /* Range currently stored: [oldest, next). Empty when equal. */
 uint32_t storage_oldest_seq(void);
 uint32_t storage_next_seq(void);

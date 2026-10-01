@@ -19,6 +19,7 @@ static record_t sample_record(void)
     rec.gain      = 9;
     rec.atime     = 29;
     rec.astep     = 0x0257;   /* 599 */
+    rec.boot_id   = 0xBEEF;
     for (uint32_t i = 0; i < AS7343_DATA_SLOT_COUNT; i++) {
         rec.counts[i] = (uint16_t)(0x0100u + i);
     }
@@ -66,13 +67,21 @@ static void test_pack_counts_little_endian_in_slot_order(void)
     }
 }
 
+static void test_pack_boot_id_little_endian_at_52(void)
+{
+    uint8_t buf[RECORD_SIZE];
+    packed_sample(buf);
+    TEST_ASSERT_EQUAL_HEX8(0xEF, buf[52]);
+    TEST_ASSERT_EQUAL_HEX8(0xBE, buf[53]);
+}
+
 static void test_pack_zeroes_reserved_and_spare(void)
 {
     uint8_t buf[RECORD_SIZE];
     packed_sample(buf);
     TEST_ASSERT_EQUAL_HEX8(0, buf[6]);
     TEST_ASSERT_EQUAL_HEX8(0, buf[7]);
-    for (uint32_t i = 52; i < 62; i++) {
+    for (uint32_t i = 54; i < 62; i++) {
         TEST_ASSERT_EQUAL_HEX8(0, buf[i]);
     }
 }
@@ -103,6 +112,7 @@ static void test_unpack_round_trips_a_packed_record(void)
     TEST_ASSERT_EQUAL_UINT8(in.gain, out.gain);
     TEST_ASSERT_EQUAL_UINT8(in.atime, out.atime);
     TEST_ASSERT_EQUAL_UINT16(in.astep, out.astep);
+    TEST_ASSERT_EQUAL_HEX16(in.boot_id, out.boot_id);
     TEST_ASSERT_EQUAL_UINT16_ARRAY(in.counts, out.counts, AS7343_DATA_SLOT_COUNT);
 }
 
@@ -167,10 +177,11 @@ static void test_from_reading_copies_measurement_fields(void)
     as7343_reading_t r = sample_reading(false);
     record_t rec;
     memset(&rec, 0xEE, sizeof rec);
-    record_from_reading(&rec, &r, 42, 1700000000u, 0);
+    record_from_reading(&rec, &r, 42, 1700000000u, 7, 0);
 
     TEST_ASSERT_EQUAL_UINT32(42, rec.seq);
     TEST_ASSERT_EQUAL_UINT32(1700000000u, rec.timestamp);
+    TEST_ASSERT_EQUAL_UINT16(7, rec.boot_id);
     TEST_ASSERT_EQUAL_UINT8(6, rec.gain);
     TEST_ASSERT_EQUAL_UINT8(29, rec.atime);
     TEST_ASSERT_EQUAL_UINT16(599, rec.astep);
@@ -182,7 +193,7 @@ static void test_from_reading_sets_saturated_flag_and_keeps_extra_flags(void)
 {
     as7343_reading_t r = sample_reading(true);
     record_t rec;
-    record_from_reading(&rec, &r, 1, 2, RECORD_FLAG_CHARGING);
+    record_from_reading(&rec, &r, 1, 2, 0, RECORD_FLAG_CHARGING);
     TEST_ASSERT_EQUAL_HEX8(RECORD_FLAG_SATURATED | RECORD_FLAG_CHARGING, rec.flags);
 }
 
@@ -192,6 +203,7 @@ int main(void)
     RUN_TEST(test_pack_header_bytes_at_fixed_offsets);
     RUN_TEST(test_pack_seq_and_timestamp_little_endian);
     RUN_TEST(test_pack_counts_little_endian_in_slot_order);
+    RUN_TEST(test_pack_boot_id_little_endian_at_52);
     RUN_TEST(test_pack_zeroes_reserved_and_spare);
     RUN_TEST(test_pack_crc_covers_bytes_0_to_61);
     RUN_TEST(test_unpack_round_trips_a_packed_record);
