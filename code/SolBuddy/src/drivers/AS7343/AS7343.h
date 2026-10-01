@@ -15,7 +15,8 @@ typedef enum {
     AS7343_ERR_NOT_PRESENT, /* nothing answered at 0x39 */
     AS7343_ERR_BUS,         /* answered, but the transfer failed */
     AS7343_ERR_WRONG_ID,    /* answered, but it is not an AS7343 */
-    AS7343_ERR_NOT_READY    /* read requested before a measurement completed */
+    AS7343_ERR_NOT_READY,   /* read requested before a measurement completed */
+    AS7343_ERR_ARG          /* illegal argument, e.g. exposure out of range */
 } as7343_result_t;
 
 /* One complete 18-channel measurement, exactly as the chip reported it. */
@@ -23,6 +24,8 @@ typedef struct {
     uint16_t counts[AS7343_DATA_SLOT_COUNT]; /* index with AS7343_SLOT_* */
     uint8_t  gain;       /* AGAIN code latched with this data (ASTATUS) */
     bool     saturated;  /* ASTATUS.ASAT_STATUS: analog or digital saturation */
+    uint8_t  atime;      /* exposure in effect for this measurement */
+    uint16_t astep;
 } as7343_reading_t;
 
 /*
@@ -34,6 +37,14 @@ typedef struct {
  * after power-up (datasheet §8); do not call earlier than that.
  */
 as7343_result_t as7343_init(void);
+
+/*
+ * Set gain (AS7343_GAIN_* code, 0-12), ATIME (0-255) and ASTEP (0-65534).
+ * Integration time = (atime + 1) * (astep + 1) * 2.78 us.
+ * Rejects illegal values with AS7343_ERR_ARG. Stops any running
+ * measurement first; call between measurements.
+ */
+as7343_result_t as7343_set_exposure(uint8_t gain, uint8_t atime, uint16_t astep);
 
 /*
  * One measurement, driven by the caller:

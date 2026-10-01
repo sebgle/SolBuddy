@@ -79,6 +79,37 @@ _Static_assert(DEFAULT_ATIME != 0u || DEFAULT_ASTEP != 0u, "ATIME and ASTEP must
 _Static_assert(DEFAULT_ASTEP <= AS7343_ASTEP_MAX, "ASTEP 65535 is reserved");
 _Static_assert(DEFAULT_GAIN <= AS7343_GAIN_2048X, "gain code out of range");
 
+/* Exposure last written to the chip; copied into every reading. */
+static uint8_t  s_atime;
+static uint16_t s_astep;
+
+static bool exposure_valid(uint8_t gain, uint8_t atime, uint16_t astep)
+{
+    if (gain > AS7343_GAIN_2048X)       return false;
+    if (astep > AS7343_ASTEP_MAX)       return false;  /* 65535 is reserved */
+    if (atime == 0u && astep == 0u)     return false;
+    return true;
+}
+
+/* Write gain, ATIME, ASTEP. The cache is updated register by register so it
+ * always matches the chip, even if a later write fails. */
+static as7343_result_t write_exposure(uint8_t gain, uint8_t atime, uint16_t astep)
+{
+    as7343_result_t r = modify_reg(AS7343_REG_CFG1, AS7343_CFG1_AGAIN_MASK,
+                                   (uint8_t)(gain << AS7343_CFG1_AGAIN_POS));
+    if (r != AS7343_OK) return r;
+
+    r = write_reg(AS7343_REG_ATIME, atime);
+    if (r != AS7343_OK) return r;
+    s_atime = atime;
+
+    r = write_reg16(AS7343_REG_ASTEP_L, astep);
+    if (r != AS7343_OK) return r;
+    s_astep = astep;
+
+    return AS7343_OK;
+}
+
 static as7343_result_t check_id(void)
 {
     as7343_result_t r = select_bank(1);
@@ -112,14 +143,7 @@ static as7343_result_t configure(void)
                    AS7343_AUTO_SMUX_18_CHANNEL << AS7343_CFG20_AUTO_SMUX_POS);
     if (r != AS7343_OK) return r;
 
-    r = modify_reg(AS7343_REG_CFG1, AS7343_CFG1_AGAIN_MASK,
-                   DEFAULT_GAIN << AS7343_CFG1_AGAIN_POS);
-    if (r != AS7343_OK) return r;
-
-    r = write_reg(AS7343_REG_ATIME, DEFAULT_ATIME);
-    if (r != AS7343_OK) return r;
-
-    r = write_reg16(AS7343_REG_ASTEP_L, DEFAULT_ASTEP);
+    r = write_exposure(DEFAULT_GAIN, DEFAULT_ATIME, DEFAULT_ASTEP);
     if (r != AS7343_OK) return r;
 
     r = write_reg(AS7343_REG_AZ_CONFIG, AS7343_AZERO_FIRST_CYCLE_ONLY);
@@ -152,6 +176,17 @@ as7343_result_t as7343_init(void)
 
     if (r != AS7343_OK) return r;
     return r_off;
+}
+
+as7343_result_t as7343_set_exposure(uint8_t gain, uint8_t atime, uint16_t astep)
+{
+    if (!exposure_valid(gain, atime, astep)) return AS7343_ERR_ARG;
+
+    /* §10.2.1: never change configuration while a measurement is running. */
+    as7343_result_t r = modify_reg(AS7343_REG_ENABLE, AS7343_ENABLE_SP_EN_MASK, 0u);
+    if (r != AS7343_OK) return r;
+
+    return write_exposure(gain, atime, astep);
 }
 
 as7343_result_t as7343_start_measurement(void)
@@ -201,6 +236,8 @@ as7343_result_t as7343_read(as7343_reading_t *reading)
     uint8_t astatus = frame[0];
     reading->gain      = (uint8_t)((astatus & AS7343_ASTATUS_AGAIN_MASK) >> AS7343_ASTATUS_AGAIN_POS);
     reading->saturated = (astatus & AS7343_ASTATUS_ASAT_MASK) != 0u;
+    reading->atime     = s_atime;
+    reading->astep     = s_astep;
 
     for (uint32_t i = 0; i < AS7343_DATA_SLOT_COUNT; i++) {
         uint8_t low  = frame[1u + 2u * i];

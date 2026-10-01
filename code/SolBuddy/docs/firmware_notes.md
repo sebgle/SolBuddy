@@ -109,3 +109,14 @@ Status (verified on Feather + Adafruit breakout, 2026-10-01):
   ASAT_ANALOG (0x08) + **reserved bit 2 (0x04), always set.**
 - ASAT_DIGITAL (STATUS2 bit 4) did not set with counts at 17999 against a
   full scale of 18000; ASTATUS.ASAT_STATUS did. Use ASTATUS for saturation.
+- **Exposure scaling is linear (set_exposure verified):** relative to
+  256x/50 ms, 64x gives 0.23-0.25x, 2048x gives 8.06-8.39x, 100 ms gives
+  1.97-2.10x. Each gain step is a few % off ideal -> per-gain calibration
+  needed later. 100 ms exposure takes ~312 ms (3 cycles).
+- **The FD (flicker) channel saturates long before the spectral channels.**
+  FD reads ~13-25x CLEAR (larger photodiode, same gain in 18-ch mode). At
+  2048x: FD = 18000 (full scale) while max non-FD ~2000. ASTATUS has one
+  saturation flag for all slots, so FD sets it first. Auto-ranging must
+  judge saturation from non-FD counts and treat the flag as explained when
+  FD >= full scale - 1. FD reached exactly 18000 here (digital limit =
+  full scale).
