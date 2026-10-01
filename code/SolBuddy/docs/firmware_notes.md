@@ -53,3 +53,35 @@ Status: verified on Feather nRF52840 Express + Adafruit AS7343 breakout
 - Open: the Feather's nRF52840 may be an older silicon revision than the
   module's Rev 3. Not a problem so far, but keep in mind if behaviour differs
   between the two boards.
+
+---
+
+## drivers/AS7343 — spectral sensor
+
+Status: `as7343_init()` (ID check + full configuration, leaves sensor asleep)
+verified on Feather + Adafruit breakout (2026-10-01), including after
+deliberately scribbling non-default values first.
+
+### Known limitations
+
+1. **Default exposure is a placeholder.** Gain 256x, ATIME 29, ASTEP 599
+   (50 ms, full scale 18000 counts) suits indoor light; daylight will
+   saturate. To be addressed with `as7343_set_exposure()` and saturation
+   flags.
+2. **No retry during the sensor's power-up window.** The AS7343 NACKs for
+   ~200-300 µs after power-on (datasheet §8). Not an issue in practice: the
+   bootloader runs far longer than that before our code starts.
+3. **Init leaves CFG0.LOW_POWER and WLONG untouched.** Irrelevant while WEN
+   is off and the sensor sleeps via PON = 0.
+
+### Verified on hardware / against documentation
+
+- Bank 1 (CFG0.REG_BANK = 1) is needed for registers 0x20-0x7F, including
+  ID at 0x5A; CFG0 itself is readable and writable from either bank.
+- Datasheet §10.2.1 order is followed: PON = 1 and SP_EN = 0 before
+  configuring.
+- 16-bit ASTEP written and read low byte first in a single burst (§9).
+- **CFG20 reads back 0x62 after setting auto_smux = 3: reserved bits 4:0
+  hold 0x02.** Undocumented, preserved by read-modify-write — never write
+  CFG20 blindly.
+- CFG3 reserved low nibble reads 0xC after init, as documented.

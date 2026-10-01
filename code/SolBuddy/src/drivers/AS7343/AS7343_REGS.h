@@ -1,7 +1,10 @@
 #ifndef AS7343_REGS_H
 #define AS7343_REGS_H
 
-/* Device identification */
+/* 7-bit I2C address (datasheet §9.1) */
+#define AS7343_I2C_ADDR              0x39u
+
+/* Device identification — register bank 1 */
 #define AS7343_REG_ID                0x5Au
 #define AS7343_DEVICE_ID_EXPECTED    0x81u
 
@@ -158,6 +161,16 @@
  * default of 0xC; do not blindly overwrite CFG3 with zero.
  *
  * Sleep between samples using ENABLE.PON instead of SAI.
+ */
+
+
+/* LED driver (LDR pin) — register bank 0 */
+#define AS7343_REG_LED                      0xCDu
+#define AS7343_LED_ACT_MASK                 0x80u
+
+/*
+ * LED_ACT turns on an LED connected to the LDR pin. Keep it off:
+ * any light it emits would be measured as ambient light.
  */
 
 
