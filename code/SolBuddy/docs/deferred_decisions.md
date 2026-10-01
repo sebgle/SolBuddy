@@ -10,29 +10,6 @@ Format: **question** — context, options, what it blocks.
 
 ## Open
 
-### Before ordering the PCB
-
-0. **QSPI pin choice — confirm SCK is on P0.19.**
-   Verified in PS Table 61 (aQFN73, PDF p.928-929): recommended QSPI pins
-   are CSN P0.18, SCK P0.19, data P0.21 / P0.22 / P0.23 / P1.00, all at
-   high drive. Nordic's set can't be used as-is here: P0.18 is the only
-   pin-reset pin (our nRESET) and P1.00 is SWO (J2 pin 6).
-   Our board uses P0.19-P0.24, so **P0.20 and P0.24 are non-recommended**.
-   Assessment: not a blocker. PSEL lets QSPI use any GPIO; "recommended"
-   concerns signal quality at 32 MHz. The Feather runs QSPI on
-   non-recommended P0.17/P0.20 without issue, and SolBuddy's throughput
-   (48 B / 30 s) lets the driver run QSPI slowly (<= 8 MHz).
-   **Actual mapping (from revA.kicad_pcb, U3 pads):** CS P0.19 (pad 42),
-   SCK P0.20 (pad 44), IO0 P0.21 (43), IO1 P0.22 (46), IO2 P0.23 (45),
-   IO3 P0.24 (48). The clock sits on a non-recommended pin while the
-   recommended SCK pin carries CS.
-   **Recommendation: swap CS and SCK before ordering** (SCK -> P0.19,
-   CS -> P0.20). Puts the clock on the recommended pin and matches the
-   Feather Express exactly (SCK P0.19, CS P0.20). Likely works either way
-   at a slow QSPI clock; the swap is free insurance pre-fab.
-   *Blocks:* PCB order (minor), board_pins.h QSPI entries.
-   *Raised:* 2026-10-01. *Awaiting:* decision on the swap.
-
 ### Sensing
 
 1. **Lengthen integration time in dim light?**
@@ -73,9 +50,22 @@ Format: **question** — context, options, what it blocks.
    board variant for the SolBuddy pins (QSPI, LFXO, no NeoPixel, etc.).
    *Blocks:* first flash of the PCB.
 
+8. **Hold HFXO during QSPI once BLE is running (errata [244]).** QSPI data
+   is corrupted if the HF clock switches between HFXO and HFINT mid-transfer,
+   which the SoftDevice does. Workaround: `sd_clock_hfclk_request()` around
+   flash operations while the SoftDevice is enabled; without it, start HFXO
+   via NRF_CLOCK directly. *Blocks:* BLE bring-up, flash driver clock hooks.
+   *Raised:* 2026-10-01.
+
 ---
 
 ## Decided
+
+- **2026-10-01 — QSPI pins stay as routed (no CS/SCK swap).** PCB: CS
+  P0.19, SCK P0.20, IO0 P0.21, IO1 P0.22, IO2 P0.23, IO3 P0.24. Nordic
+  recommends SCK on P0.19 (PS Table 61), so the clock is on a
+  non-recommended pin; mitigated by running QSPI slowly (<= 8 MHz).
+  The Feather differs (SCK P0.19, CS P0.20) — board_pins.h selects per board.
 
 - **2026-10-01 — Log full of unsynced data: overwrite the oldest anyway.**
   Recent behaviour is what goals/nudges act on, and a device that silently
