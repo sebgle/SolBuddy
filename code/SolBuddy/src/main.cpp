@@ -1,43 +1,37 @@
 /*
- * Bring-up test: auto-ranged sampling (app/sampler).
- * One sample every 2 s (the real interval will be 30 s).
+ * Bring-up test: end to end. Sensor -> sampler -> record -> ring log -> flash,
+ * then read back and compare. Press reset: the log must continue its seqs.
  * Serial is only used to print results; it is not part of the firmware design.
+ *
+ * NOTE: the log uses the Feather's whole external flash except sector 0.
  */
 #include <Arduino.h>
 #include <Adafruit_TinyUSB.h>   /* provides USB Serial; PlatformIO only links it if included */
 
+#include <string.h>
+
 #include "hal/i2c.h"
 #include "drivers/AS7343/AS7343.h"
-#include "drivers/AS7343/AS7343_REGS.h"
 #include "app/sampler.h"
+#include "app/storage.h"
+#include "services/record.h"
 
-/* Gain code -> multiplier text, for readable output. */
-static const char *const GAIN_NAMES[] = {
-    "0.5x", "1x", "2x", "4x", "8x", "16x", "32x",
-    "64x", "128x", "256x", "512x", "1024x", "2048x",
-};
-
-static const char *as7343_result_name(as7343_result_t r)
+static const char *storage_result_name(storage_result_t r)
 {
     switch (r) {
-        case AS7343_OK:              return "OK";
-        case AS7343_ERR_NOT_PRESENT: return "ERR_NOT_PRESENT";
-        case AS7343_ERR_BUS:         return "ERR_BUS";
-        case AS7343_ERR_WRONG_ID:    return "ERR_WRONG_ID";
-        case AS7343_ERR_NOT_READY:   return "ERR_NOT_READY";
-        case AS7343_ERR_ARG:         return "ERR_ARG";
+        case STORAGE_OK:            return "OK";
+        case STORAGE_ERR_FLASH:     return "ERR_FLASH";
+        case STORAGE_NOT_AVAILABLE: return "NOT_AVAILABLE";
+        case STORAGE_LOST:          return "LOST";
     }
     return "UNKNOWN";
 }
 
-static uint16_t peak_non_fd(const as7343_reading_t *r)
+static bool records_equal(const record_t *a, const record_t *b)
 {
-    uint16_t peak = 0;
-    for (uint32_t i = 0; i < AS7343_DATA_SLOT_COUNT; i++) {
-        if (i == AS7343_SLOT_FD_1 || i == AS7343_SLOT_FD_2 || i == AS7343_SLOT_FD_3) continue;
-        if (r->counts[i] > peak) peak = r->counts[i];
-    }
-    return peak;
+    return a->seq == b->seq && a->timestamp == b->timestamp && a->flags == b->flags &&
+           a->gain == b->gain && a->atime == b->atime && a->astep == b->astep &&
+           memcmp(a->counts, b->counts, sizeof a->counts) == 0;
 }
 
 void setup()
@@ -46,29 +40,42 @@ void setup()
     while (!Serial) delay(10);
 
     i2c_init();
-    Serial.printf("as7343_init  -> %s\n", as7343_result_name(as7343_init()));
-    Serial.printf("sampler_init -> %s\n", as7343_result_name(sampler_init()));
+    Serial.printf("as7343_init  -> %d\n", as7343_init());
+    Serial.printf("sampler_init -> %d\n", sampler_init());
+
+    uint32_t t0 = millis();
+    storage_result_t r = storage_init();
+    Serial.printf("storage_init -> %s in %lu ms | stored seqs [%lu, %lu)\n",
+                  storage_result_name(r), millis() - t0,
+                  storage_oldest_seq(), storage_next_seq());
 }
 
 void loop()
 {
-    static uint32_t n = 0;
     as7343_reading_t reading;
     uint8_t attempts = 0;
+    if (sampler_take_sample(&reading, &attempts) != AS7343_OK) {
+        Serial.println("sample failed");
+        delay(3000);
+        return;
+    }
+
+    /* No real clock yet: seconds since boot, flagged as such. */
+    record_t rec;
+    record_from_reading(&rec, &reading, 0, millis() / 1000u, RECORD_FLAG_TIME_UNSET);
 
     uint32_t t0 = millis();
-    as7343_result_t r = sampler_take_sample(&reading, &attempts);
-    uint32_t took = millis() - t0;
+    storage_result_t r = storage_append(&rec);
+    uint32_t t_append = millis() - t0;
 
-    if (r != AS7343_OK) {
-        Serial.printf("#%lu sample -> %s\n", ++n, as7343_result_name(r));
-    } else {
-        uint16_t peak = peak_non_fd(&reading);
-        Serial.printf("#%lu gain %5s | attempts %u | %4lu ms | peak %5u (%3lu%%) | CLEAR %5u | FD %5u%s\n",
-                      ++n, GAIN_NAMES[reading.gain], attempts, took,
-                      peak, (uint32_t)peak * 100u / 18000u,
-                      reading.counts[AS7343_SLOT_CLEAR_1], reading.counts[AS7343_SLOT_FD_1],
-                      reading.saturated ? " | SAT flag" : "");
-    }
-    delay(2000);
+    record_t back;
+    memset(&back, 0, sizeof back);
+    storage_result_t rb = storage_read(rec.seq, &back);
+
+    Serial.printf("seq %5lu | append %s %3lu ms | read back %s %s | gain %2u CLEAR %5u%s\n",
+                  rec.seq, storage_result_name(r), t_append, storage_result_name(rb),
+                  (rb == STORAGE_OK && records_equal(&rec, &back)) ? "MATCH" : "MISMATCH",
+                  rec.gain, rec.counts[AS7343_SLOT_CLEAR_1],
+                  (rec.seq % 64u == 0u) ? "  <- new sector (erase)" : "");
+    delay(3000);
 }

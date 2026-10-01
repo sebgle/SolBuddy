@@ -150,3 +150,65 @@ idle, 1024 Hz tick). Max 5 attempts; timeout = 3 cycles + 100 ms.
   judge saturation from non-FD counts and treat the flag as explained when
   FD >= full scale - 1. FD reached exactly 18000 here (digital limit =
   full scale).
+
+---
+
+## hal/qspi — QSPI bus layer (single-line SPI, 8 MHz, polled)
+
+Status: verified on Feather (GD25Q16C), 2026-10-01.
+
+### Known limitations
+1. **Single-line SPI only** (FASTREAD 0x0B / PP 0x02). Quad mode would
+   need chip-specific quad-enable bits; throughput (64 B / 30 s) doesn't
+   need it.
+2. **Busy-waits on READY** with a poll-count safety net, like hal/i2c.
+3. **No HFXO request yet** — needed once the SoftDevice runs (errata [244],
+   see deferred_decisions.md #8).
+
+### Verified on hardware / against documentation
+- PS §6.19.1 configuration order; QSPI pins at high drive (H0H1).
+- EasyDMA: word-aligned flash address and RAM buffer, length multiple of 4.
+- Erase READY means *started*, not finished (PS §6.19.4) — poll WIP.
+- Custom instructions: LENGTH counts the opcode; IO2/IO3 (WP#/HOLD#) held
+  high via LIO2/LIO3.
+- Errata [122] current fix applied in qspi_uninit (before ENABLE = 0).
+- **Do not use the peripheral's own deep power-down (IFCONFIG0.DPMENABLE /
+  IFCONFIG1.DPMEN).** On hardware, entering DPM left STATUS = 0x06
+  (DPM = 1, READY = BUSY) and no READY event ever came; custom
+  instructions are refused while BUSY. Sending B9/AB as custom
+  instructions works and is verified (chip stops answering RDID: FF FF FF).
+
+## drivers/spi_nor — SPI NOR flash (MX25R6435F, GD25Q16C)
+
+Status: verified on Feather GD25Q16C, 2026-10-01: ID C8 40 15, 4 KB erase
+~38-41 ms, 4 x 64 B program ~1 ms, misaligned source buffers, cross-page
+program refused, deep power-down proven (no RDID answer) and wake.
+MX25R6435F not yet tested (needs the PCB).
+
+- Timings use the stricter chip: program timeout 20 ms, erase 400 ms,
+  DPM settle 1 ms (needs 20 us enter / 35 us exit).
+- MX25R standby is 5 uA typ / 24 uA max vs 0.007 uA in deep power-down:
+  the flash must be powered down between writes.
+- spi_nor_init wakes the chip and waits for any interrupted program/erase:
+  the flash keeps its state across an MCU reset.
+
+## app/storage — sample log on external flash
+
+Status: verified end to end on Feather, 2026-10-01: sensor -> sampler ->
+record -> ringlog -> spi_nor; every record read back and matched; after a
+reset the log resumed at the next seq (6) instead of restarting. Mount of
+511 sectors: 49 ms. Append: 2 ms (sector-start appends add the erase).
+
+- Layout: sector 0 reserved (calibration / metadata), log from sector 1.
+  Feather: 511 log sectors; PCB (8 MB): 2047 sectors = 131008 records.
+- Power: each call is a session — QSPI on, chip woken and identified,
+  work, chip to deep power-down, QSPI off (errata [122] fix).
+
+### Known limitations / open
+1. **Open: first append after boot takes 257-280 ms** (later ones 2 ms),
+   even when it is not a sector start. Cause not yet identified — time each
+   step of session_begin (qspi_init, wake, wait_while_busy, RDID).
+   Impact small (once per boot) but should be understood.
+2. **No lock.** Sampling and (future) BLE sync must not use storage at the
+   same time — same as hal/i2c; see deferred_decisions.md #6.
+3. **Reads are one session per record.** Batch for BLE sync later.
