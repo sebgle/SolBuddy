@@ -67,10 +67,12 @@ Status (verified on Feather + Adafruit breakout, 2026-10-01):
 
 ### Known limitations
 
-1. **Default exposure is a placeholder.** Gain 256x, ATIME 29, ASTEP 599
-   (50 ms, full scale 18000 counts) suits indoor light; daylight will
-   saturate. To be addressed with `as7343_set_exposure()` and saturation
-   flags.
+1. **Only gain is auto-ranged; integration time is fixed at 50 ms.**
+   Indoors (a dim room) the peak sits at ~1-2 % of full scale even at
+   2048x (~300 counts; ~10 when covered). The < 10 lx / < 1 lx night
+   thresholds will be single counts. Next lever: lengthen integration time
+   once gain is at 2048x. Trade-off is sensor-on time vs battery — decide
+   with the power budget.
 2. **No retry during the sensor's power-up window.** The AS7343 NACKs for
    ~200-300 µs after power-on (datasheet §8). Not an issue in practice: the
    bootloader runs far longer than that before our code starts.
@@ -82,6 +84,34 @@ Status (verified on Feather + Adafruit breakout, 2026-10-01):
    later runs or after a reset. If it did, slots 6-17 of that sample would
    be stale. Watch for it; a defensive check would be a minimum elapsed
    time before accepting AVALID.
+5. **Light changing mid-measurement makes slots inconsistent.** The three
+   cycles are ~50 ms apart, so a sudden change (flashlight arriving) gives
+   e.g. CLEAR 262 in cycle 1 but 1084 in a later cycle. Not a firmware bug.
+   For the app: compare the three CLEAR slots (4/10/16); if they disagree
+   beyond noise, flag or discard the sample.
+
+---
+
+## services/autorange — auto-ranging decision (pure logic)
+
+Status: 15 unit tests pass on PC (`pio test -e native`); verified on
+hardware through app/sampler (2026-10-01).
+
+Rule (full scale fs = min(65535, (ATIME+1)(ASTEP+1)); peak = max over the
+15 non-FD slots):
+- peak >= fs-1 (clipped): drop 3 gain steps, retry now.
+- peak > 80 % fs, or saturated flag not explained by FD at full scale:
+  drop enough steps to reach <= 50 % (min 1), retry now.
+- peak < 20 % fs: accept; raise gain enough to approach 50 % next sample.
+- otherwise accept, same gain. Gain clamped to 0.5x..2048x.
+
+## app/sampler — one loggable sample
+
+Status: verified on hardware (2026-10-01). Room → flashlight took 3
+attempts (2048x → 256x → 32x, 488 ms); flashlight → room logged one dim
+sample then jumped back up in one step; FD-only saturation did not cause
+back-off. Uses FreeRTOS `vTaskDelay` while waiting (CPU sleeps; tickless
+idle, 1024 Hz tick). Max 5 attempts; timeout = 3 cycles + 100 ms.
 
 ### Verified on hardware / against documentation
 

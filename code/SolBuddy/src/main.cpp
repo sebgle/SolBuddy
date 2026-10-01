@@ -1,7 +1,7 @@
 /*
- * Bring-up test: as7343_set_exposure().
- * Measures the same scene at several exposures; counts should scale with
- * gain x integration time. Serial is only used to print results.
+ * Bring-up test: auto-ranged sampling (app/sampler).
+ * One sample every 2 s (the real interval will be 30 s).
+ * Serial is only used to print results; it is not part of the firmware design.
  */
 #include <Arduino.h>
 #include <Adafruit_TinyUSB.h>   /* provides USB Serial; PlatformIO only links it if included */
@@ -9,24 +9,13 @@
 #include "hal/i2c.h"
 #include "drivers/AS7343/AS7343.h"
 #include "drivers/AS7343/AS7343_REGS.h"
+#include "app/sampler.h"
 
-#define POLL_INTERVAL_MS    5
-#define MEASURE_TIMEOUT_MS  1000
-
-typedef struct {
-    uint8_t  gain;
-    uint8_t  atime;
-    uint16_t astep;
-    float    expected_ratio;   /* vs. the first row */
-} exposure_t;
-
-static const exposure_t EXPOSURES[] = {
-    { AS7343_GAIN_256X,  29, 599, 1.0f  },   /* baseline: 256x, 50 ms */
-    { AS7343_GAIN_64X,   29, 599, 0.25f },   /* 1/4 the gain */
-    { AS7343_GAIN_2048X, 29, 599, 8.0f  },   /* 8x the gain */
-    { AS7343_GAIN_256X,  59, 599, 2.0f  },   /* 2x the time: 100 ms */
+/* Gain code -> multiplier text, for readable output. */
+static const char *const GAIN_NAMES[] = {
+    "0.5x", "1x", "2x", "4x", "8x", "16x", "32x",
+    "64x", "128x", "256x", "512x", "1024x", "2048x",
 };
-#define EXPOSURE_COUNT  (sizeof EXPOSURES / sizeof EXPOSURES[0])
 
 static const char *as7343_result_name(as7343_result_t r)
 {
@@ -41,73 +30,14 @@ static const char *as7343_result_name(as7343_result_t r)
     return "UNKNOWN";
 }
 
-/* One complete measurement: start, poll, read, sleep. */
-static as7343_result_t measure(as7343_reading_t *reading, uint32_t *elapsed_ms)
+static uint16_t peak_non_fd(const as7343_reading_t *r)
 {
-    as7343_result_t r = as7343_start_measurement();
-    uint32_t t_start = millis();
-    if (r != AS7343_OK) return r;
-
-    bool ready = false;
-    while (!ready && (millis() - t_start) < MEASURE_TIMEOUT_MS) {
-        delay(POLL_INTERVAL_MS);
-        r = as7343_data_ready(&ready);
-        if (r != AS7343_OK) break;
+    uint16_t peak = 0;
+    for (uint32_t i = 0; i < AS7343_DATA_SLOT_COUNT; i++) {
+        if (i == AS7343_SLOT_FD_1 || i == AS7343_SLOT_FD_2 || i == AS7343_SLOT_FD_3) continue;
+        if (r->counts[i] > peak) peak = r->counts[i];
     }
-    *elapsed_ms = millis() - t_start;
-
-    if (r == AS7343_OK) r = ready ? as7343_read(reading) : AS7343_ERR_NOT_READY;
-    as7343_sleep();
-    return r;
-}
-
-static void argument_tests(void)
-{
-    Serial.println("argument checks (all should be ERR_ARG):");
-    Serial.printf("  gain 13          -> %s\n", as7343_result_name(as7343_set_exposure(13, 29, 599)));
-    Serial.printf("  atime 0, astep 0 -> %s\n", as7343_result_name(as7343_set_exposure(AS7343_GAIN_256X, 0, 0)));
-    Serial.printf("  astep 65535      -> %s\n", as7343_result_name(as7343_set_exposure(AS7343_GAIN_256X, 29, 65535)));
-}
-
-static void exposure_sweep(void)
-{
-    float baseline_clear = 0.0f;
-
-    for (uint32_t i = 0; i < EXPOSURE_COUNT; i++) {
-        const exposure_t *e = &EXPOSURES[i];
-
-        as7343_result_t r = as7343_set_exposure(e->gain, e->atime, e->astep);
-        if (r != AS7343_OK) {
-            Serial.printf("  set_exposure -> %s\n", as7343_result_name(r));
-            return;
-        }
-
-        as7343_reading_t reading;
-        uint32_t elapsed = 0;
-        r = measure(&reading, &elapsed);
-        if (r != AS7343_OK) {
-            Serial.printf("  measure -> %s\n", as7343_result_name(r));
-            return;
-        }
-
-        float clear = reading.counts[AS7343_SLOT_CLEAR_1];
-        if (i == 0) baseline_clear = clear;
-        float ratio = (baseline_clear > 0.0f) ? clear / baseline_clear : 0.0f;
-
-        /* Brightest slot excluding FD, to see what saturates first. */
-        uint32_t max_slot = 0;
-        for (uint32_t s = 0; s < AS7343_DATA_SLOT_COUNT; s++) {
-            if (s == AS7343_SLOT_FD_1 || s == AS7343_SLOT_FD_2 || s == AS7343_SLOT_FD_3) continue;
-            if (reading.counts[s] > reading.counts[max_slot]) max_slot = s;
-        }
-
-        Serial.printf("  gain %2u atime %3u astep %5u | %4lu ms | CLEAR %5u FD %5u max-non-FD %5u (slot %2lu) | "
-                      "ratio %5.2f (expect %4.2f)%s\n",
-                      reading.gain, reading.atime, reading.astep, elapsed,
-                      reading.counts[AS7343_SLOT_CLEAR_1], reading.counts[AS7343_SLOT_FD_1],
-                      reading.counts[max_slot], max_slot, ratio, e->expected_ratio,
-                      reading.saturated ? "  SATURATED" : "");
-    }
+    return peak;
 }
 
 void setup()
@@ -116,14 +46,29 @@ void setup()
     while (!Serial) delay(10);
 
     i2c_init();
-    Serial.printf("as7343_init -> %s\n", as7343_result_name(as7343_init()));
-    argument_tests();
+    Serial.printf("as7343_init  -> %s\n", as7343_result_name(as7343_init()));
+    Serial.printf("sampler_init -> %s\n", as7343_result_name(sampler_init()));
 }
 
 void loop()
 {
-    static uint32_t run = 0;
-    Serial.printf("--- exposure sweep %lu ---\n", ++run);
-    exposure_sweep();
-    delay(3000);
+    static uint32_t n = 0;
+    as7343_reading_t reading;
+    uint8_t attempts = 0;
+
+    uint32_t t0 = millis();
+    as7343_result_t r = sampler_take_sample(&reading, &attempts);
+    uint32_t took = millis() - t0;
+
+    if (r != AS7343_OK) {
+        Serial.printf("#%lu sample -> %s\n", ++n, as7343_result_name(r));
+    } else {
+        uint16_t peak = peak_non_fd(&reading);
+        Serial.printf("#%lu gain %5s | attempts %u | %4lu ms | peak %5u (%3lu%%) | CLEAR %5u | FD %5u%s\n",
+                      ++n, GAIN_NAMES[reading.gain], attempts, took,
+                      peak, (uint32_t)peak * 100u / 18000u,
+                      reading.counts[AS7343_SLOT_CLEAR_1], reading.counts[AS7343_SLOT_FD_1],
+                      reading.saturated ? " | SAT flag" : "");
+    }
+    delay(2000);
 }
