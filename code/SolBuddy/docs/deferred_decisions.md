@@ -57,6 +57,16 @@ Format: **question** — context, options, what it blocks.
    via NRF_CLOCK directly. *Blocks:* BLE bring-up, flash driver clock hooks.
    *Raised:* 2026-10-01.
 
+### Power
+
+9. **Low-battery cut-off voltage.** The spec's LOW-BATT state sends the
+   device to System OFF "below cut-off" but gives no number. The MAX17048
+   driver takes it as a parameter (VALRT.MIN, 20 mV steps) and pulls ALRT
+   (P0.26) low below it. Candidates: ~3.3-3.4 V leaves margin for the
+   TPS62740 (needs VIN above its 1.8 V output plus dropout) and for cell
+   health. Also decide: act on voltage alone, or on SOC (ATHD alert)?
+   *Blocks:* app LOW-BATT state. *Raised:* 2026-10-01.
+
 ---
 
 ## Decided

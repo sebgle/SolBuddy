@@ -212,3 +212,20 @@ reset the log resumed at the next seq (6) instead of restarting. Mount of
 2. **No lock.** Sampling and (future) BLE sync must not use storage at the
    same time — same as hal/i2c; see deferred_decisions.md #6.
 3. **Reads are one session per record.** Batch for BLE sync later.
+
+## drivers/MAX17048 — fuel gauge
+
+Status: **not hardware-tested** (no breakout; first test on the PCB).
+13 unit tests pass against a simulated gauge (test/test_max17048, attached
+to the PC-only bus in src/hal/host).
+
+- 16-bit registers, **MSB first** on the wire (opposite of the AS7343).
+- I2C logic: VIH min 1.4 V; our bus idles at 1.8 V -> 0.4 V margin.
+- init: VERSION & 0xFFF0 == 0x0010, CONFIG written explicitly (0x971C:
+  RCOMP 0x97, ATHD 4 %, ALRT clear), VALRT = low_alert_mv / 20 with high
+  alert off (0xFF), then STATUS.RI cleared last.
+- Conversions: VCELL mV = raw * 5 / 64 (78.125 uV/LSb); SOC kept raw
+  (1/256 %); CRATE signed, 0.208 %/h per LSb.
+- Not used: quick-start (can corrupt SOC), custom model (TABLE), sleep mode.
+- Datasheet note 6: the gauge enters shutdown if SDA and SCL are both low
+  > 2.5 s — keep the I2C pull-ups powered whenever the gauge should run.
