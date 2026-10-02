@@ -66,6 +66,11 @@ Format: **question** — context, options, what it blocks.
 
 ## Decided
 
+- **2026-10-02 — BLE security: LE Secure Connections, Just Works bonding.**
+  Every SolBuddy characteristic requires an encrypted link. No passkey is
+  possible (no screen/button); accepted risk: an active attacker during the
+  very first pairing. See docs/ble_protocol.md §2.1.
+
 - **2026-10-01 — Timestamps before the phone sets UTC:** log seconds since
   boot with RECORD_FLAG_TIME_UNSET, plus a 16-bit boot_id (record bytes
   52-53) = newest stored record's boot_id + 1 (no extra flash writes).

@@ -3,6 +3,10 @@
 
 #include <FreeRTOS.h>
 #include <task.h>
+#include <nrf_sdm.h>
+#include <nrf_soc.h>
+
+#define HFXO_START_WAIT_MS  10u     /* HFXO typically starts in < 1 ms */
 
 #define RESERVED_SECTORS    1u      /* sector 0: calibration / metadata */
 
@@ -34,13 +38,47 @@ static int flash_erase_sector(uint32_t addr)
 
 static const ringlog_flash_t FLASH_OPS = { flash_read, flash_program, flash_erase_sector };
 
+/* ---- errata [244]: hold HFXO during QSPI --------------------------------- */
+/* QSPI data is corrupted if the HF clock switches between HFXO and HFINT
+ * mid-transfer, which the SoftDevice does as the radio comes and goes.
+ * Asking the SoftDevice to keep HFXO running for the whole session stops
+ * the switching. Without the SoftDevice nothing switches the clock, so
+ * there is nothing to do. */
+
+static bool s_hfxo_requested;
+
+static void hfxo_hold(void)
+{
+    uint8_t sd_enabled = 0;
+    if (sd_softdevice_is_enabled(&sd_enabled) != NRF_SUCCESS || !sd_enabled) return;
+    if (sd_clock_hfclk_request() != NRF_SUCCESS) return;
+    s_hfxo_requested = true;
+
+    for (uint32_t waited = 0; waited < HFXO_START_WAIT_MS; waited++) {
+        uint32_t running = 0;
+        sd_clock_hfclk_is_running(&running);
+        if (running) return;
+        sleep_ms(1);
+    }
+}
+
+static void hfxo_release(void)
+{
+    if (s_hfxo_requested) {
+        sd_clock_hfclk_release();
+        s_hfxo_requested = false;
+    }
+}
+
 /* ---- power: flash awake only inside a session ---------------------------- */
 
 static bool session_begin(void)
 {
+    hfxo_hold();
     uint32_t size = 0;
     if (spi_nor_init(sleep_ms, &size) != SPI_NOR_OK) {
         spi_nor_uninit();
+        hfxo_release();
         return false;
     }
     s_flash_size = size;
@@ -51,6 +89,7 @@ static void session_end(void)
 {
     spi_nor_power_down();   /* chip: 5 uA standby -> 0.007 uA */
     spi_nor_uninit();       /* QSPI peripheral off, errata [122] fix */
+    hfxo_release();         /* HFXO costs ~ hundreds of uA if left on */
 }
 
 static storage_result_t from_ringlog(ringlog_result_t r)
