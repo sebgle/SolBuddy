@@ -67,8 +67,9 @@ UUID base: `a222xxxx-40cd-4ab3-a79e-6157aec9630e`
 | Calibration | `0007` | read | TBD | §5.6 |
 
 Writes are *write with response*. Invalid values are rejected with ATT
-error `0x13` (Value Not Allowed); wrong lengths with `0x0D` (Invalid
-Attribute Value Length).
+error `0xFF` (Out of Range); wrong lengths with `0x0D` (Invalid Attribute
+Value Length). (`0x13` Value Not Allowed is newer than the SoftDevice
+version in use, which treats it as reserved.)
 
 ## 5. Characteristic details
 
@@ -108,7 +109,7 @@ Attribute Value Length).
 | 0 | u32 | utc_s — seconds since 1970-01-01T00:00:00Z |
 
 - Write: sets the device clock. Values before 2024-01-01 (1704067200) are
-  rejected (`0x13`): they indicate an unset phone clock.
+  rejected (`0xFF`): they indicate an unset phone clock.
 - Read: current UTC, 0 if never set this boot.
 - The app should write Time on every connection.
 
@@ -157,7 +158,7 @@ one fails); stop at END.
 | 6 | u16 | reserved | 0 | 0 |
 
 - Writes must be all 8 bytes; any field out of range rejects the whole
-  write (`0x13`) and nothing changes.
+  write (`0xFF`) and nothing changes.
 - Persisted in flash (sector 0); survives resets and power loss.
 
 ### 5.5 Live (notify)

@@ -38,20 +38,27 @@ Last updated: 2026-10-01.
       Status read, reconnect after disconnect)
 - [ ] Hold HFXO during QSPI while the SoftDevice runs — errata 244 (D8)
 - [ ] GATT service skeleton with the five characteristics
-- [ ] Time: phone writes UTC -> clock_set_utc
+- [x] Time: phone writes UTC -> clock_set_utc (verified 2026-10-02)
 - [ ] Status: SoC, VCELL, uptime/UTC/boot_id, oldest/next seq, fault counters
-- [ ] Log Read: stream records from seq N; batch flash sessions; skip LOST
+- [x] Log Read: stream records from seq N; batch flash sessions; skip LOST
+      (verified 2026-10-02: 1677 records, 7.6 s, all CRCs, no gaps, CAUGHT_UP)
+- [ ] Faster first sync: request a short connection interval (7.5-15 ms)
+      during Log Read; full 45-day log is ~10 min at the measured 14 KiB/s
 - [ ] Config: sample interval, advertising policy, live enable; persist in
       flash sector 0
 - [ ] Live: 1 Hz stream, auto-exit after N minutes
 - [ ] Advertising policy: 1285 ms default; 20 ms burst for 30 s after reset
       or USB insertion
 - [ ] Buttonless DFU (firmware update over BLE)
+- [ ] Service Changed indication after a firmware update changes the GATT
+      table: bonded phones cache it (seen 2026-10-02: phone showed only the
+      old Status characteristic after Time/Log Read were added)
 
 ## 3. Application structure
 
 - [ ] Task layout: sampling task (every 30 s), BLE, battery; priorities
 - [ ] Locks for the I2C bus and storage once two tasks share them (D6)
+      (storage lock done 2026-10-02; I2C still open)
 - [ ] State machine: BOOT / NORMAL / SYNC / FAST-ADV / CHARGING / LIVE /
       LOW-BATT, per the spec
 - [ ] USB VBUS detection -> CHARGING flag on records + fast advertising

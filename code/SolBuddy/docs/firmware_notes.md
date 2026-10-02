@@ -252,3 +252,22 @@ UTC after set_utc (3 s spacing exact), boot_id 1 -> 2 across a reset.
 - System OFF (LOW-BATT) and any reset lose UTC: the next boot logs uptime
   until the phone sets time again.
 - Record format: boot_id added at bytes 52-53 (spare now 54-61).
+
+## app/ble — BLE peripheral (Bluefruit / SoftDevice s140 6.1.1)
+
+Status 2026-10-02, verified with tools/solbuddy_sync.py (PC) and nRF Connect
+(iOS): advertising SolBuddy-9E3D, Just Works bonding, encrypted Status/Time/
+Log Read, Time write -> UTC (read-back diff 0 s), bad writes rejected with
+0xFF / 0x0D, full log pull 1677 records in 7.6 s (13.8 KiB/s), no gaps.
+
+- **notify() is not "send or fail"**: Bluefruit has 3 TX slots (BANDWIDTH_MAX)
+  and gives up after 100 ms without a free one. Slots free once per
+  connection event, which centrals may space > 100 ms apart. A transfer
+  stopped silently after 6 notifications until notify_reliably() retried.
+- ATT 0x13 (Value Not Allowed) is RFU in SoftDevice 6.1.1 -> use 0xFF.
+- Write-authorize replies must always set update = 1 (ble_gatts.h).
+- Bonded phones cache the GATT table: after adding characteristics, iOS
+  showed only the old ones until the bond was forgotten -> Service Changed
+  (todo).
+- Windows/bleak: connects often need retries; bleak's mtu_size on Windows
+  reports 23 even when 247 was negotiated (device sent 192-byte packets).

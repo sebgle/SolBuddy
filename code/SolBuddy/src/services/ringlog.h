@@ -58,6 +58,10 @@ ringlog_result_t ringlog_append(ringlog_t *log, record_t *rec);
 /* Read one record by sequence number. */
 ringlog_result_t ringlog_read(const ringlog_t *log, uint32_t seq, record_t *rec);
 
+/* Same checks as ringlog_read, but returns the record's 64 bytes exactly as
+ * stored (CRC included) — what the BLE Log Read characteristic sends. */
+ringlog_result_t ringlog_read_raw(const ringlog_t *log, uint32_t seq, uint8_t raw[RECORD_SIZE]);
+
 /* Oldest sequence number still stored (== next_seq when empty). */
 uint32_t ringlog_oldest_seq(const ringlog_t *log);
 

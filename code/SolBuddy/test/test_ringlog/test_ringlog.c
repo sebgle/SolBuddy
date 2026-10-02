@@ -278,6 +278,31 @@ static void test_damaged_first_record_of_sector_is_rewritten(void)
     TEST_ASSERT_EQUAL(RINGLOG_OK, ringlog_read(&again, RINGLOG_RECORDS_PER_SECTOR, &out));
 }
 
+/* ---- Raw read (for BLE: records sent exactly as stored) ------------------ */
+
+static void test_read_raw_returns_the_stored_bytes(void)
+{
+    ringlog_t log = mount_ok();
+    append_n(&log, 5);
+    uint8_t raw[RECORD_SIZE];
+    TEST_ASSERT_EQUAL(RINGLOG_OK, ringlog_read_raw(&log, 3, raw));
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(&mem[slot_addr(3)], raw, RECORD_SIZE);
+}
+
+static void test_read_raw_reports_unavailable_and_lost_like_read(void)
+{
+    ringlog_t log = mount_ok();
+    append_n(&log, 10);
+    partial_bytes = 32;
+    record_t rec = make_record(1);
+    ringlog_append(&log, &rec);              /* seq 10 half-written */
+    ringlog_t again = mount_ok();
+
+    uint8_t raw[RECORD_SIZE];
+    TEST_ASSERT_EQUAL(RINGLOG_LOST, ringlog_read_raw(&again, 10, raw));
+    TEST_ASSERT_EQUAL(RINGLOG_NOT_AVAILABLE, ringlog_read_raw(&again, 11, raw));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -297,5 +322,7 @@ int main(void)
     RUN_TEST(test_remount_at_exact_sector_boundary);
     RUN_TEST(test_half_written_record_is_skipped_and_reported_lost);
     RUN_TEST(test_damaged_first_record_of_sector_is_rewritten);
+    RUN_TEST(test_read_raw_returns_the_stored_bytes);
+    RUN_TEST(test_read_raw_reports_unavailable_and_lost_like_read);
     return UNITY_END();
 }

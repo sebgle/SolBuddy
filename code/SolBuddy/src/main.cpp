@@ -1,7 +1,6 @@
 /*
- * Bring-up test: BLE + sampling + storage together (errata 244 clock hold).
- * Logs a record every 3 s and reads it back while advertising/connected;
- * Status carries the real boot_id, uptime and stored range.
+ * Bring-up test: BLE Time + Log Read on top of sampling + storage.
+ * Logs a record every 3 s; a phone can set the time and pull the log.
  * Serial is only used to print results; it is not part of the firmware design.
  */
 #include <Arduino.h>
@@ -15,30 +14,27 @@
 #include "app/clock.h"
 #include "app/sampler.h"
 #include "app/storage.h"
+#include "services/protocol.h"
 #include "services/record.h"
 
-static void put_u16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
-static void put_u32(uint8_t *p, uint32_t v)
-{
-    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
+#define FW_VERSION  0x0001u     /* 0.1 */
 
-/* Partial Status (protocol §5.1); battery and faults come later. */
 static void update_status(void)
 {
-    uint8_t s[BLE_STATUS_LEN];
-    memset(s, 0, sizeof s);
     bool is_utc = false;
     uint32_t ts = clock_timestamp(&is_utc);
 
-    s[0] = 1;                                   /* protocol_version */
-    s[2] = is_utc ? 0x01 : 0x00;                /* flags: bit0 UTC set */
-    put_u16(&s[6],  storage_boot_id());
-    put_u32(&s[8],  clock_uptime_s());
-    put_u32(&s[12], is_utc ? ts : 0u);
-    put_u32(&s[20], storage_oldest_seq());
-    put_u32(&s[24], storage_next_seq());
-    ble_set_status(s);
+    proto_status_t s;
+    memset(&s, 0, sizeof s);
+    s.state      = ble_syncing() ? PROTO_STATE_SYNC : PROTO_STATE_NORMAL;
+    s.flags      = is_utc ? PROTO_STATUS_FLAG_UTC_SET : 0u;
+    s.fw_version = FW_VERSION;
+    s.boot_id    = storage_boot_id();
+    s.uptime_s   = clock_uptime_s();
+    s.utc_s      = is_utc ? ts : 0u;
+    s.oldest_seq = storage_oldest_seq();
+    s.next_seq   = storage_next_seq();
+    ble_set_status(&s);
 }
 
 void setup()
@@ -47,22 +43,48 @@ void setup()
     while (!Serial) delay(10);
 
     clock_init();
-    ble_init();                 /* SoftDevice running from here on */
     i2c_init();
-    Serial.printf("advertising as %s\n", ble_name());
     Serial.printf("as7343_init -> %d, sampler_init -> %d\n", as7343_init(), sampler_init());
     Serial.printf("storage_init -> %d | seqs [%lu, %lu) | boot_id %u\n", storage_init(),
                   storage_oldest_seq(), storage_next_seq(), storage_boot_id());
+    ble_init();
+    Serial.printf("advertising as %s\n", ble_name());
     update_status();
 }
 
 void loop()
 {
-    static bool was_connected = false;
+    static bool was_connected = false, was_syncing = false, was_utc = false;
+
     bool connected = ble_connected();
     if (connected != was_connected) {
         Serial.println(connected ? "phone connected" : "phone disconnected");
         was_connected = connected;
+    }
+    static uint32_t seen_writes = 0;
+    uint8_t w_chr = 0, w_result = 0;
+    uint16_t w_len = 0;
+    uint32_t writes = ble_last_write(&w_chr, &w_result, &w_len);
+    if (writes != seen_writes) {
+        static const char *const RESULT[] = { "ACCEPTED", "REJECTED: bad length (0x0D)",
+                                              "REJECTED: out of range (0xFF)" };
+        Serial.printf("write to %s, %u bytes -> %s\n", w_chr == 3 ? "Time" : "Log Read",
+                      w_len, w_result < 3 ? RESULT[w_result] : "?");
+        seen_writes = writes;
+    }
+
+    bool syncing = ble_syncing();
+    if (syncing != was_syncing) {
+        if (syncing) {
+            Serial.println("Log Read transfer started");
+        } else {
+            uint16_t interval = 0;
+            uint32_t retries = 0;
+            ble_last_transfer(&interval, &retries);
+            Serial.printf("Log Read transfer ended (connection interval %u.%02u ms, %lu slot waits)\n",
+                          interval * 125u / 100u, (interval * 125u) % 100u, retries);
+        }
+        was_syncing = syncing;
     }
 
     as7343_reading_t reading;
@@ -70,22 +92,15 @@ void loop()
     if (sampler_take_sample(&reading, &attempts) == AS7343_OK) {
         bool is_utc = false;
         uint32_t ts = clock_timestamp(&is_utc);
-        record_t rec, back;
+        if (is_utc && !was_utc) Serial.printf("phone set UTC: %lu\n", ts);
+        was_utc = is_utc;
+
+        record_t rec;
         record_from_reading(&rec, &reading, 0, ts, storage_boot_id(),
                             is_utc ? 0u : RECORD_FLAG_TIME_UNSET);
-
-        uint32_t t0 = millis();
         storage_result_t r = storage_append(&rec);
-        uint32_t took = millis() - t0;
-        memset(&back, 0, sizeof back);
-        storage_result_t rb = storage_read(rec.seq, &back);
-        bool match = (rb == STORAGE_OK) && back.seq == rec.seq &&
-                     memcmp(back.counts, rec.counts, sizeof rec.counts) == 0;
-
-        Serial.printf("seq %5lu | %s | append %d in %2lu ms | read back %s%s\n",
-                      rec.seq, connected ? "BLE connected" : "advertising  ",
-                      r, took, match ? "MATCH" : "MISMATCH",
-                      (r == STORAGE_OK && match) ? "" : "   <-- FAIL");
+        Serial.printf("logged seq %lu (%s) ts %lu %s\n", rec.seq, r == STORAGE_OK ? "ok" : "FAIL",
+                      ts, is_utc ? "UTC" : "uptime");
     }
 
     update_status();

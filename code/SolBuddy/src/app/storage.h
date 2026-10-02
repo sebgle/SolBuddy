@@ -35,6 +35,16 @@ storage_result_t storage_append(record_t *rec);
 /* Read one record by sequence number. */
 storage_result_t storage_read(uint32_t seq, record_t *rec);
 
+/*
+ * For BLE sync: copy up to max_records stored records, starting at *seq,
+ * into out (64 bytes each, exactly as stored). Damaged records are skipped.
+ * A *seq older than the oldest stored record starts at the oldest.
+ * On return *count = records copied, *seq = next seq to ask for.
+ * One flash session per call: other tasks wait at most one batch.
+ */
+storage_result_t storage_read_raw_batch(uint32_t *seq, uint8_t *out,
+                                        uint32_t max_records, uint32_t *count);
+
 /* Boot number for this boot: newest stored record's boot_id + 1 (0 if the
  * log is empty). Valid after storage_init. */
 uint16_t storage_boot_id(void);

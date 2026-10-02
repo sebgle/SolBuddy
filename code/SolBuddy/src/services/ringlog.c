@@ -20,11 +20,11 @@ static uint32_t addr_of(const ringlog_t *log, uint32_t slot)
     return log->base + slot * RECORD_SIZE;
 }
 
-/* Returns false on a flash read error. */
-static bool read_slot(const ringlog_t *log, uint32_t slot, record_t *rec, slot_state_t *state)
+/* Reads a slot into raw[] and judges it. Returns false on a flash read error. */
+static bool read_slot_raw(const ringlog_t *log, uint32_t slot, uint8_t raw[RECORD_SIZE],
+                          record_t *rec, slot_state_t *state)
 {
-    uint8_t raw[RECORD_SIZE];
-    if (log->flash->read(addr_of(log, slot), raw, sizeof raw) != 0) return false;
+    if (log->flash->read(addr_of(log, slot), raw, RECORD_SIZE) != 0) return false;
 
     record_result_t r = record_unpack(raw, rec);
     if (r == RECORD_ERASED) {
@@ -35,6 +35,12 @@ static bool read_slot(const ringlog_t *log, uint32_t slot, record_t *rec, slot_s
         *state = SLOT_BAD;
     }
     return true;
+}
+
+static bool read_slot(const ringlog_t *log, uint32_t slot, record_t *rec, slot_state_t *state)
+{
+    uint8_t raw[RECORD_SIZE];
+    return read_slot_raw(log, slot, raw, rec, state);
 }
 
 ringlog_result_t ringlog_mount(ringlog_t *log, const ringlog_flash_t *flash,
@@ -112,6 +118,17 @@ uint32_t ringlog_oldest_seq(const ringlog_t *log)
      * round next_seq up to a sector boundary, then go back one full ring. */
     const uint32_t end = (log->next_seq + RPS - 1u) / RPS * RPS;
     return (end > log->capacity) ? end - log->capacity : 0u;
+}
+
+ringlog_result_t ringlog_read_raw(const ringlog_t *log, uint32_t seq, uint8_t raw[RECORD_SIZE])
+{
+    if (seq >= log->next_seq || seq < ringlog_oldest_seq(log)) return RINGLOG_NOT_AVAILABLE;
+
+    record_t rec;
+    slot_state_t state;
+    if (!read_slot_raw(log, slot_of(log, seq), raw, &rec, &state)) return RINGLOG_ERR_FLASH;
+    if (state != SLOT_VALID || rec.seq != seq)                     return RINGLOG_LOST;
+    return RINGLOG_OK;
 }
 
 ringlog_result_t ringlog_read(const ringlog_t *log, uint32_t seq, record_t *rec)

@@ -24,7 +24,7 @@ extern "C" {
 typedef enum {
     PROTO_OK = 0,
     PROTO_ERR_LENGTH,   /* -> ATT 0x0D Invalid Attribute Value Length */
-    PROTO_ERR_VALUE     /* -> ATT 0x13 Value Not Allowed */
+    PROTO_ERR_VALUE     /* -> ATT 0xFF Out of Range */
 } proto_result_t;
 
 /* ---- Status (§5.1) ------------------------------------------------------- */
